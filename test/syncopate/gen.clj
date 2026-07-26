@@ -20,6 +20,62 @@
               (gen/tuple attr (gen/fmap (fn [vt] {:db/valueType vt}) value-type))
               {:max-elements 12}))))
 
+;; ---------------------------------------------------------------------------
+;; Schema deltas and migration steps (for the pure/unit generative tests)
+;; ---------------------------------------------------------------------------
+
+(def additive-delta
+  "A purely-additive schema delta: {:schema {attr def ...}}."
+  (gen/fmap (fn [m] {:schema m}) attr->def))
+
+(def removal-delta
+  "A removal-only delta: {:schema/remove [attr ...]}."
+  (gen/fmap (fn [as] {:schema/remove (vec as)})
+            (gen/not-empty (gen/set attr {:max-elements 12}))))
+
+(def mixed-delta
+  "A delta with both :schema and :schema/remove."
+  (gen/fmap (fn [[a r]] (merge a r)) (gen/tuple additive-delta removal-delta)))
+
+(def tx-step
+  "A raw-transaction step: {:tx [...]}."
+  (gen/fmap (fn [n] {:tx (vec (repeat n {}))}) (gen/choose 0 6)))
+
+(def fn-symbol
+  "A fully-qualified symbol naming a migration fn."
+  (gen/fmap #(symbol "my.app" (str "f" %)) gen/nat))
+
+(def core-var
+  (gen/elements [#'clojure.core/identity #'clojure.core/inc
+                 #'clojure.core/str #'clojure.core/vec]))
+
+(def anon-fn
+  (gen/elements [(fn [_] nil) (fn [_] 1) (fn [_] :ok)]))
+
+(def non-delta
+  "Values that are neither a recognized step map nor a symbol/var/fn."
+  (gen/one-of [gen/small-integer gen/string-alphanumeric gen/keyword
+               (gen/return {}) (gen/return {:foo 1})]))
+
+(def step
+  "Any migration step shape — drives the step-phase / step-summary specs."
+  (gen/one-of [fn-symbol core-var anon-fn tx-step
+               additive-delta removal-delta mixed-delta non-delta]))
+
+(def migration-spec
+  "A valid input to `->migration`: additive :up (so :down auto-derives), with an
+  occasional :transaction?/:irreversible? override."
+  (gen/let [id    (gen/fmap str gen/nat)
+            up    (gen/vector additive-delta 1 4)
+            extra (gen/one-of [(gen/return {})
+                               (gen/return {:transaction? false})
+                               (gen/return {:irreversible? true})])]
+    (merge {:id id :up up} extra)))
+
+;; ---------------------------------------------------------------------------
+;; Migration plans (for the stateful specs)
+;; ---------------------------------------------------------------------------
+
 (defn- group->migration [i group]
   {:id (format "m%03d" i)
    :up [{:schema (into {} group)}]})
