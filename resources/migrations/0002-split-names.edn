@@ -1,0 +1,10 @@
+;; Schema change plus a data transform referenced by symbol (resolved to a real
+;; var at run time — no quoting, any namespace). Not auto-invertible, so :down
+;; is spelled out.
+{:up   [{:schema {:user/given-name  {:db/valueType :db.type/string}
+                  :user/family-name {:db/valueType :db.type/string}}}
+        syncopate.example/split-user-names
+        {:schema/remove [:user/name]}]
+ :down [{:schema {:user/name {:db/valueType :db.type/string}}}
+        syncopate.example/join-user-names
+        {:schema/remove [:user/given-name :user/family-name]}]}
