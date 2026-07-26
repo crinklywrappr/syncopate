@@ -12,19 +12,32 @@
   (:require [datalevin.core :as d]
             [taoensso.trove :as trove]))
 
+(defn- attrs-map?
+  "A `:schema` value: a map of attribute keyword -> definition map."
+  [m]
+  (and (map? m) (every? (fn [[a d]] (and (keyword? a) (map? d))) m)))
+
+(defn- attr-coll?
+  "A `:schema/remove` value: a collection of attribute keywords."
+  [xs]
+  (and (coll? xs) (every? keyword? xs)))
+
 (defn schema-delta?
-  "True if `step` is a declarative schema delta map."
+  "True if `step` is a well-formed declarative schema delta: a map carrying a
+  `:schema` (attr keyword -> definition map) and/or a `:schema/remove`
+  (collection of attr keywords). Malformed shapes are rejected so they surface as
+  an \"unrecognised step\" early rather than as a cryptic Datalevin error."
   [step]
   (and (map? step)
-       (or (contains? step :schema)
-           (contains? step :schema/remove))))
+       (or (contains? step :schema) (contains? step :schema/remove))
+       (or (not (contains? step :schema))        (attrs-map? (:schema step)))
+       (or (not (contains? step :schema/remove)) (attr-coll? (:schema/remove step)))))
 
 (defn additive?
-  "True if `step` is a purely additive schema delta — the only shape we can
-  automatically invert (into a `:schema/remove`)."
+  "True if `step` is a purely additive schema delta (a `:schema` with no
+  `:schema/remove`) — the only shape we can automatically invert."
   [step]
   (and (schema-delta? step)
-       (contains? step :schema)
        (not (contains? step :schema/remove))))
 
 (defn invert

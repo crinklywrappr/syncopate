@@ -57,10 +57,30 @@
   (gen/one-of [gen/small-integer gen/string-alphanumeric gen/keyword
                (gen/return {}) (gen/return {:foo 1})]))
 
+(def ^:private not-a-map
+  (gen/one-of [gen/small-integer gen/string-alphanumeric gen/keyword]))
+
+(def ^:private malformed-schema-val
+  "A `:schema` value of the wrong shape."
+  (gen/one-of [not-a-map
+               (gen/fmap #(into {} (for [[k v] %] [k (str v)])) attr->def)   ; attr -> non-map
+               (gen/fmap #(into {} (for [[_ v] %] [(str (gensym "a")) v])) attr->def)])) ; non-kw key
+
+(def ^:private malformed-remove-val
+  "A `:schema/remove` value of the wrong shape."
+  (gen/one-of [not-a-map
+               (gen/vector gen/small-integer 1 4)
+               (gen/vector gen/string-alphanumeric 1 4)]))
+
+(def malformed-delta
+  "Maps that name :schema / :schema/remove but with wrong-shaped values."
+  (gen/one-of [(gen/fmap (fn [v] {:schema v}) malformed-schema-val)
+               (gen/fmap (fn [v] {:schema/remove v}) malformed-remove-val)]))
+
 (def step
   "Any migration step shape — drives the step-phase / step-summary specs."
   (gen/one-of [fn-symbol core-var anon-fn tx-step
-               additive-delta removal-delta mixed-delta non-delta]))
+               additive-delta removal-delta mixed-delta non-delta malformed-delta]))
 
 (def migration-spec
   "A valid input to `->migration`: additive :up (so :down auto-derives), with an

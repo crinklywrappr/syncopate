@@ -11,6 +11,12 @@ All notable changes to this project will be documented in this file. This change
   catalog and how to wire a backend.
 
 ### Changed
+- Hardened the `syncopate.schema/schema-delta?` and `additive?` predicates: a
+  schema delta's `:schema` must be a map of attribute keyword → definition map, and
+  `:schema/remove` must be a collection of attribute keywords. Malformed shapes
+  (e.g. `{:schema 42}`) are now rejected up front — surfacing as a clear
+  "unrecognised step" error rather than a cryptic Datalevin failure. This tightens
+  the (public) predicate contract, which previously accepted any `:schema` value.
 - Documented the JVM flags Datalevin needs (`--add-opens` for `java.nio`/`sun.nio.ch`,
   `--enable-native-access`, and `--sun-misc-unsafe-memory-access=allow` on JDK 24+).
   The test task now sets these automatically (portable across JDK versions), so

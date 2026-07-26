@@ -44,6 +44,15 @@
   (prop/for-all [x sgen/non-delta]
     (and (not (schema/schema-delta? x)) (not (schema/additive? x)))))
 
+(defspec malformed-deltas-are-rejected 500
+  (prop/for-all [d sgen/malformed-delta]
+    (and (not (schema/schema-delta? d)) (not (schema/additive? d)))))
+
+(defspec additive-iff-schema-delta-without-removal 1000
+  (prop/for-all [s sgen/step]
+    (= (schema/additive? s)
+       (and (schema/schema-delta? s) (not (contains? s :schema/remove))))))
+
 ;; ---------------------------------------------------------------------------
 ;; core/as-steps
 ;; ---------------------------------------------------------------------------
@@ -82,6 +91,12 @@
 (defspec step-phase-classifies-unknown 500
   (prop/for-all [s sgen/non-delta]
     (= :unknown (step-phase s))))
+
+(defspec malformed-schema-steps-are-unknown 500
+  (prop/for-all [s sgen/malformed-delta]
+    ;; step-summary must also not crash on these (it used to call keys on a non-map)
+    (and (= :unknown (step-phase s))
+         (= :unknown (:phase (step-summary s))))))
 
 ;; ---------------------------------------------------------------------------
 ;; core/step-summary — consistency with step-phase + per-kind detail
