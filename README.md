@@ -1,17 +1,14 @@
 # com.github.crinklywrappr/syncopate
 
+[![CI](https://github.com/crinklywrappr/syncopate/actions/workflows/ci.yml/badge.svg)](https://github.com/crinklywrappr/syncopate/actions/workflows/ci.yml)
+[![Clojars Project](https://img.shields.io/clojars/v/com.github.crinklywrappr/syncopate.svg)](https://clojars.org/com.github.crinklywrappr/syncopate)
+
 A claude-quality [ragtime](https://github.com/weavejester/ragtime) adaptor
 for [Datalevin](https://github.com/juji-io/datalevin).
 
 Syncopate lets you version and evolve a Datalevin schema (and the data around it)
 with ragtime's battle-tested migrate/rollback machinery — while fixing the sharp
 edges that the SQL adaptors and hand-rolled Datalevin adaptors trip over.
-
-## Coordinates
-
-```
-com.github.crinklywrappr/syncopate {:mvn/version "1.0.<git-rev>"}
-```
 
 ## Why another adaptor
 

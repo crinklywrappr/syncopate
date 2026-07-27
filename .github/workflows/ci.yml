@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write            # push the release tag on master
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0            # version is 1.0.<git rev count> — needs full history
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: ${{ runner.os }}-cljdeps-${{ hashFiles('deps.edn') }}
+          restore-keys: ${{ runner.os }}-cljdeps-
+
+      - name: Test + build
+        run: clojure -T:build ci
+
+      - name: Deploy to Clojars
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
+          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_PASSWORD }}
+        run: clojure -T:build deploy
+
+      - name: Tag the release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: |
+          TAG="v1.0.$(git rev-list --count HEAD)"   # matches build.clj's version
+          git tag "$TAG"
+          git push origin "$TAG"
