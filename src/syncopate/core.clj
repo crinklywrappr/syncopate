@@ -305,9 +305,10 @@
                  :msg  (str "Migrating up: " id)
                  :data {:migration/id id :transactional? txn? :steps (count steps)}})
     (if txn?
-      (d/with-transaction [c conn]
-        (run-steps! c id :up steps)
-        (store/record! c dbi id))
+      (let [seq (store/next-seq conn dbi)]     ; read on the base conn, before the txn
+        (d/with-transaction [c conn]
+          (run-steps! c id :up steps)
+          (store/record! c dbi id seq)))
       (do (rp/run-up! migration store)
           (rp/add-migration-id store id)))
     (trove/log! {:level :info :id :syncopate/migrated

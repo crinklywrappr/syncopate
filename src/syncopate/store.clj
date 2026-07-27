@@ -35,14 +35,26 @@
   [conn dbi-name]
   (d/open-dbi (conn->lmdb conn) dbi-name))
 
+(defn next-seq
+  "The next monotonic application sequence number for `conn`'s migrations DBI:
+  one past the largest `:seq` on record (never reused, so it's robust to the gaps
+  `unrecord!` leaves). Ordering by `:seq` reflects true application order, immune
+  to wall-clock millisecond ties."
+  [conn dbi-name]
+  (ensure-store! conn dbi-name)
+  (transduce
+   (map (fn [[_ v]] (:seq v -1)))
+   (completing max inc)
+   -1 (d/get-range (conn->lmdb conn) dbi-name [:all])))
+
 (defn record!
-  "Record `id` as applied, via `conn` (which may be transaction-bound). Assumes
-  the DBI already exists (see `ensure-store!`)."
-  [conn dbi-name id]
-  (d/transact-kv (conn->lmdb conn) [[:put dbi-name (str id) {:applied-at (Date.)}]])
+  "Record `id` as applied with application sequence `seq`, via `conn` (which may be
+  transaction-bound). Assumes the DBI already exists (see `ensure-store!`)."
+  [conn dbi-name id seq]
+  (d/transact-kv (conn->lmdb conn) [[:put dbi-name (str id) {:applied-at (Date.) :seq seq}]])
   (trove/log! {:level :debug :id :syncopate/recorded
                :msg  (str "Recorded applied migration: " id)
-               :data {:migration/id (str id) :dbi dbi-name}}))
+               :data {:migration/id (str id) :dbi dbi-name :seq seq}}))
 
 (defn unrecord!
   "Remove `id` from the applied set, via `conn` (which may be transaction-bound)."
@@ -56,7 +68,7 @@
   rp/DataStore
   (add-migration-id [_ id]
     (ensure-store! conn dbi-name)
-    (record! conn dbi-name id))
+    (record! conn dbi-name id (next-seq conn dbi-name)))
 
   (remove-migration-id [_ id]
     (ensure-store! conn dbi-name)
@@ -71,7 +83,9 @@
       ;; get-range returns a datalevin SpillableVector (its .toArray is
       ;; abstract, so sort-by would blow up) — realise into a plain vector first.
       (->> (into [] (d/get-range lmdb dbi-name [:all]))
-           (sort-by (fn [[k v]] [(:applied-at v) k]))
+           ;; :seq is the true application order (monotonic); :applied-at / id are
+           ;; only fallbacks for any legacy record written before :seq existed.
+           (sort-by (fn [[k v]] [(:seq v -1) (:applied-at v) k]))
            (mapv first)))))
 
 (defn- warm!

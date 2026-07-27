@@ -256,3 +256,12 @@
 (deftest migration-missing-id
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing :id"
                         (syncopate/->migration {:up {:schema {:a/b {}}}}))))
+
+(deftest applied-ids-follow-application-order
+  ;; Apply out of id order ("b" then "a"); applied-migration-ids must reflect
+  ;; APPLICATION order via the monotonic :seq, not the wall-clock/id tie-break.
+  (syncopate/migrate! *store*
+    (syncopate/->migration {:id "b" :up [{:schema {:z/b {:db/valueType :db.type/long}}}]}))
+  (syncopate/migrate! *store*
+    (syncopate/->migration {:id "a" :up [{:schema {:z/a {:db/valueType :db.type/long}}}]}))
+  (is (= ["b" "a"] (rp/applied-migration-ids *store*))))

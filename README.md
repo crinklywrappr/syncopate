@@ -1,17 +1,14 @@
 # com.github.crinklywrappr/syncopate
 
+[![CI](https://github.com/crinklywrappr/syncopate/actions/workflows/ci.yml/badge.svg)](https://github.com/crinklywrappr/syncopate/actions/workflows/ci.yml)
+[![Clojars Project](https://img.shields.io/clojars/v/com.github.crinklywrappr/syncopate.svg)](https://clojars.org/com.github.crinklywrappr/syncopate)
+
 A claude-quality [ragtime](https://github.com/weavejester/ragtime) adaptor
 for [Datalevin](https://github.com/juji-io/datalevin).
 
 Syncopate lets you version and evolve a Datalevin schema (and the data around it)
 with ragtime's battle-tested migrate/rollback machinery — while fixing the sharp
 edges that the SQL adaptors and hand-rolled Datalevin adaptors trip over.
-
-## Coordinates
-
-```
-com.github.crinklywrappr/syncopate {:mvn/version "1.0.<git-rev>"}
-```
 
 ## Why another adaptor
 
@@ -205,6 +202,10 @@ applied-id behind), and the logging events (captured via a test trove backend).
   transaction. The two-transaction seam (body committed, applied-id recorded
   after) remains only for `ragtime.core/migrate` and for `:transaction? false`
   migrations, which have no transaction to fold into; keep those idempotent-friendly.
+- Run migrations from a **single, serial writer** — the normal deploy/startup
+  path. Syncopate does not coordinate concurrent migration runs, so applying
+  migrations from two processes (or threads) against the same store at the same
+  time is unsupported and can corrupt the applied-migration bookkeeping.
 - Auto-derived `:down` only covers additive schema deltas; anything that removes
   attributes, transacts data, or runs a function needs an explicit `:down` (the
   prior state can't be inferred).
