@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](http://keepachangelog.com/).
 
 ## [Unreleased]
+### Fixed
+- Applied-migration ordering (and therefore `rollback-last!`) now tracks true
+  application order via a persisted monotonic `:seq`, instead of `:applied-at`
+  wall-clock time. Previously, migrations recorded within the same millisecond and
+  applied out of id order could be returned id-sorted, so `rollback-last!` might
+  roll back the wrong one.
+
 ### Added
 - Structured logging via [trove](https://github.com/taoensso/trove): migration
   lifecycle, per-step, schema-delta, and load events with stable `:id`s, human
