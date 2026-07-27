@@ -261,10 +261,17 @@
 ;; ---------------------------------------------------------------------------
 
 (defn store
-  "Construct a Syncopate ragtime DataStore over a live Datalevin connection.
-  See `syncopate.store/store` for options."
+  "Construct a Syncopate ragtime DataStore over a live Datalevin connection
+  (embedded or client/server). See `syncopate.store/store` for options."
   ([conn] (store/store conn))
   ([conn opts] (store/store conn opts)))
+
+(defn close!
+  "Release resources a store holds beyond its connection — for a client/server
+  store, the KV client opened to the server. No-op for embedded stores (the caller
+  closes the connection)."
+  [store]
+  (store/close! store))
 
 (defn pending
   "The migrations from `migrations` not yet recorded as applied in `store`,
@@ -304,11 +311,15 @@
     (trove/log! {:level :debug :id :syncopate/migrating
                  :msg  (str "Migrating up: " id)
                  :data {:migration/id id :transactional? txn? :steps (count steps)}})
-    (if txn?
-      (let [seq (store/next-seq conn dbi)]     ; read on the base conn, before the txn
+    (if (and txn? (not (:remote? store)))
+      ;; embedded: fold the applied-id write into the migration's own transaction
+      (let [seq (store/next-seq (:kv store) dbi)]  ; read on the store's KV, before the txn
         (d/with-transaction [c conn]
           (run-steps! c id :up steps)
-          (store/record! c dbi id seq)))
+          (store/record! (store/conn->lmdb c) dbi id seq)))  ; write via the txn conn → joins it
+      ;; client/server (or :transaction? false): body runs (in its own datalog
+      ;; transaction when txn?), then the applied-id is recorded separately — the
+      ;; two-transaction seam (the KV client can't join a remote datalog txn).
       (do (rp/run-up! migration store)
           (rp/add-migration-id store id)))
     (trove/log! {:level :info :id :syncopate/migrated
@@ -331,10 +342,10 @@
     (trove/log! {:level :debug :id :syncopate/rolling-back
                  :msg  (str "Rolling back: " id)
                  :data {:migration/id id :transactional? txn? :steps (count steps)}})
-    (if txn?
+    (if (and txn? (not (:remote? store)))
       (d/with-transaction [c conn]
         (run-steps! c id :down steps)
-        (store/unrecord! c dbi id))
+        (store/unrecord! (store/conn->lmdb c) dbi id))
       (do (rp/run-down! migration store)
           (rp/remove-migration-id store id)))
     (trove/log! {:level :info :id :syncopate/rolled-back
