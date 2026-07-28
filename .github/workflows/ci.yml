@@ -32,7 +32,19 @@ jobs:
           key: ${{ runner.os }}-cljdeps-${{ hashFiles('deps.edn') }}
           restore-keys: ${{ runner.os }}-cljdeps-
 
+      - name: Test (client/server)
+        # Run the suite as a pure client against a REAL, separate datalevin
+        # server process (not in-process) — the client/server boundary is the
+        # thing under test. Swap for a datalevin service container via
+        # `:server-uri` if stronger isolation is ever wanted.
+        run: |
+          clojure -M:server & echo $! > /tmp/dtlv.pid
+          for i in $(seq 1 60); do (exec 3<>/dev/tcp/127.0.0.1/8898) 2>/dev/null && break; sleep 1; done
+          clojure -T:build test :remote true
+          kill "$(cat /tmp/dtlv.pid)" || true
+
       - name: Test + build
+        # Existing embedded suite + jar build (runs once).
         run: clojure -T:build ci
 
       - name: Deploy to Clojars

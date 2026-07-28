@@ -6,7 +6,8 @@
             [ragtime.protocols :as rp]
             [taoensso.trove :as trove]
             [syncopate.core :as syncopate]
-            [syncopate.example :as example])
+            [syncopate.example :as example]
+            [syncopate.test-db :as test-db])
   (:import [java.net URL]
            [java.util UUID]
            [java.util.jar JarEntry JarOutputStream]))
@@ -15,16 +16,21 @@
 (def ^:dynamic *store* nil)
 
 (defn with-temp-db [f]
-  (let [dir  (str "/tmp/syncopate-test-" (UUID/randomUUID))
-        conn (d/get-conn dir {})]
+  ;; A fresh, isolated db per test — embedded temp dir or a fresh remote db,
+  ;; per syncopate.test.mode (see syncopate.test-db). close! releases the
+  ;; remote store's KV client (a no-op embedded).
+  (let [conn  (test-db/fresh-conn)
+        store (syncopate/store conn)]
     (binding [*conn*  conn
-              *store* (syncopate/store conn)]
+              *store* store]
       (try (f)
-           (finally (d/close conn))))))
+           (finally (syncopate/close! store)
+                    (d/close conn))))))
 
 (use-fixtures :each with-temp-db)
 ;; Keep normal test runs quiet; logging tests install a capturing fn via binding.
-(use-fixtures :once (fn [f] (trove/set-log-fn! nil) (f)))
+;; In remote mode, fail fast if no server is reachable.
+(use-fixtures :once (fn [f] (trove/set-log-fn! nil) (test-db/assert-server!) (f)))
 
 (defn- migrations [] (syncopate/load-resources "migrations"))
 
@@ -117,7 +123,10 @@
       (is (= ["0001-add-users" "0002-split-names"] (rp/applied-migration-ids *store*)))
       (is (not (contains? (app-schema-attrs) :dept/name))))))
 
-(deftest atomic-rollback-on-failure
+(deftest ^:embedded atomic-rollback-on-failure
+  ;; Embedded-only: this is the atomic-fold guarantee that client/server
+  ;; deliberately trades for the documented two-transaction seam (the schema
+  ;; step commits before the failing fn, so it can't roll back remotely).
   ;; The key guarantee: a failing transactional :up leaves NEITHER the schema
   ;; change NOR the applied-id behind — both roll back together.
   (let [boom (syncopate/->migration

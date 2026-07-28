@@ -20,13 +20,17 @@ in ragtime's issue tracker, and the ideas in
 [datalevin-surge](https://github.com/aldebogdanov/datalevin-surge):
 
 - **Bookkeeping stays out of your data.** Applied-migration state lives in a
-  dedicated key-value DBI on the *same* LMDB environment your connection already
+  dedicated key-value DBI on the *same* environment your connection already
   holds — never as datoms. It's invisible to `d/schema` and Datalog queries, and
-  works under `:closed-schema? true`. (Datalevin refuses a second LMDB connection
-  to the same directory, so Syncopate reuses the connection's own environment.)
+  works under `:closed-schema? true`. This holds for both **embedded** connections
+  (reusing the connection's own LMDB env) and **client/server** (`dtlv://`)
+  connections (a KV client to the *same server database*, so the DBI sits beside
+  `datalevin/eav` etc. on the server).
 - **Migrations are atomic** — each direction runs inside `d/with-transaction` by
   default, with a per-migration `:transaction? false` escape for operations that
-  can't (ragtime issues #107 / #119).
+  can't (ragtime issues #107 / #119). (In client/server mode the applied-id write
+  can't join the remote datalog transaction, so it uses the two-transaction seam —
+  the same one `:transaction? false` uses; see "Notes & limitations".)
 - **Errors are actionable.** Failures are re-thrown as `ex-info` carrying the
   migration id, direction, phase and offending step — never silently dropped
   (ragtime issues #130 / #146).
@@ -125,7 +129,7 @@ A `.clj` migration, whose steps may be real functions
 (ragtime/rollback-last store {})
 ```
 
-### Atomic helpers (recommended)
+### Atomic helpers (recommended — fully atomic on embedded)
 
 `ragtime.core/migrate` runs the migration body and records the applied-id as two
 separate transactions. Syncopate's own helpers fold both writes into a single
@@ -143,6 +147,13 @@ applied-id behind):
 This is possible because the applied-id lives in a KV DBI on the *same* LMDB
 environment as the data. It applies to transactional migrations (the default);
 `:transaction? false` migrations fall back to the two-step path.
+
+**Mode note.** The single-unit commit above is an *embedded*-mode property. In
+client/server (`dtlv://`) the applied-id write can't join the remote datalog
+transaction, so these same helpers remain the recommended entry point but fall
+back to the two-transaction seam (body commits first, applied-id recorded after —
+see [Notes & limitations](#notes--limitations)). Bookkeeping still lives in the KV
+DBI on the same server environment; only the atomic fold is lost.
 
 `syncopate/store` options:
 
@@ -183,17 +194,36 @@ config). Building `:data` is deferred, so disabled log levels cost effectively n
 
 ## Testing
 
+Embedded (a temporary local Datalevin database):
+
 ```
 clojure -T:build test
 ```
 
-The suite runs against a temporary Datalevin database and covers loading/ordering,
-auto-`:down` derivation, the reversibility guard, a full migrate/rollback
-round-trip (schema *and* data, including a symbol-referenced transform and a
-`.clj` migration), applied-id ordering, the no-schema-pollution invariant,
-error-context propagation, the atomic helpers, the key atomic-rollback
-guarantee (a failing transactional `:up` leaves neither schema change nor
-applied-id behind), and the logging events (captured via a test trove backend).
+Client/server — the same suite run as a **pure client against a real, separate
+datalevin server**. Start one (in another terminal), then run the remote suite:
+
+```
+clojure -M:server                       # datalevin serv on :8898 (data/test-server)
+clojure -T:build test :remote true      # connects to dtlv://…@localhost:8898
+```
+
+Point at an already-running / containerised server instead with
+`clojure -T:build test :remote true :server-uri "dtlv://user:pass@host:port"`.
+`ci` forwards these args (`clojure -T:build ci :remote true`), and CI runs both
+modes. Each test uses a fresh database (embedded a temp dir, remote a unique
+`dtlv://…/t<uuid>` the server auto-creates), so runs are isolated.
+
+The suite covers loading/ordering, auto-`:down` derivation, the reversibility
+guard, a full migrate/rollback round-trip (schema *and* data, including a
+symbol-referenced transform and a `.clj` migration), applied-id ordering, the
+no-schema-pollution invariant, error-context propagation, the atomic helpers, and
+the logging events — plus a generative suite (reduced iteration counts remote).
+The one exception is the atomic-**rollback-on-failure** guarantee (a failing
+transactional `:up` leaves neither schema change nor applied-id behind): that is
+embedded-only — it's the single-transaction fold client/server trades for the
+[two-transaction seam](#atomic-helpers-recommended--fully-atomic-on-embedded), so
+it's tagged `^:embedded` and skipped in the remote run.
 
 ## Notes & limitations
 
@@ -210,7 +240,14 @@ applied-id behind), and the logging events (captured via a test trove backend).
   attributes, transacts data, or runs a function needs an explicit `:down` (the
   prior state can't be inferred).
 - Reaching the connection's LMDB handle uses Datalevin internals
-  (`(.lmdb (:store @conn))`); verified against Datalevin 1.0.0.
+  (`(.lmdb (:store @conn))` embedded; the remote store's `:uri` + `open-kv` for
+  client/server); verified against Datalevin 1.0.0.
+- **Client/server** (`dtlv://`) is supported: the store opens a KV client to the
+  same server database (sharing the datalog connection's env). Call
+  `(syncopate/close! store)` when done to release that client (no-op for embedded).
+  Client/server migrations use the two-transaction seam (body committed, applied-id
+  recorded after) since the KV client can't join the remote datalog transaction —
+  keep them idempotent-friendly, as with `:transaction? false`.
 - Datalevin needs some JVM flags (they suppress warnings / grant native access):
   `--add-opens=java.base/java.nio=ALL-UNNAMED`,
   `--add-opens=java.base/sun.nio.ch=ALL-UNNAMED`, and

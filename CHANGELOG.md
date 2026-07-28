@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](http://keepachangelog.com/).
 
 ## [Unreleased]
+### Added
+- **Client/server (`dtlv://`) support.** `store` now works over a networked
+  Datalevin connection as well as an embedded one, keeping the core promise:
+  applied-migration state still lives in a dedicated KV DBI on the *same*
+  environment the connection holds (a KV client to the same server database),
+  never as datoms. New `close!` releases that client (no-op for embedded).
+  Client/server migrations use the two-transaction seam (the KV client can't join
+  the remote datalog transaction); embedded keeps the single-transaction fold.
+
 ### Fixed
 - Applied-migration ordering (and therefore `rollback-last!`) now tracks true
   application order via a persisted monotonic `:seq`, instead of `:applied-at`

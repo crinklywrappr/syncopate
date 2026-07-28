@@ -7,16 +7,18 @@
             [datalevin.core :as d]
             [ragtime.protocols :as rp]
             [syncopate.core :as syncopate]
-            [syncopate.gen :as sgen])
-  (:import [java.util UUID]))
+            [syncopate.gen :as sgen]
+            [syncopate.test-db :as test-db]))
 
 (defn- with-temp-db
-  "Open a fresh Datalevin conn, run (f conn), always close it."
+  "Open a fresh Datalevin conn + store (embedded or remote per test mode), run
+  (f conn store), and always release both — close! frees the remote store's KV
+  client (a no-op embedded) so many iterations don't leak server sessions."
   [f]
-  (let [dir  (str "/tmp/syncopate-gen-" (UUID/randomUUID))
-        conn (d/get-conn dir {})]
-    (try (f conn)
-         (finally (d/close conn)))))
+  (let [conn  (test-db/fresh-conn)
+        store (syncopate/store conn)]
+    (try (f conn store)
+         (finally (syncopate/close! store) (d/close conn)))))
 
 (defn- schema-attrs [conn] (set (keys (d/schema conn))))
 
@@ -32,6 +34,7 @@
 
 ;; ---------------------------------------------------------------------------
 ;; 1. Pure: an auto-derived :down removes exactly what :up added.
+;;    (conn-free — runs identically in both modes; not reduced for remote.)
 ;; ---------------------------------------------------------------------------
 
 (defspec derived-down-covers-additions 300
@@ -44,16 +47,17 @@
      migrations)))
 
 ;; ---------------------------------------------------------------------------
-;; 2. Round-trip: migrate-all! then full rollback restores the schema (the
-;;    money-test analog).
+;; The remaining specs hit a conn — reduced iteration counts in remote mode
+;; (every iteration is a round-trip to the server) via test-db/gen-count.
 ;; ---------------------------------------------------------------------------
 
-(defspec migrate-rollback-restores-schema 60
+;; 2. Round-trip: migrate-all! then full rollback restores the schema (the
+;;    money-test analog).
+(defspec migrate-rollback-restores-schema (test-db/gen-count 60)
   (prop/for-all [{:keys [migrations attr->def]} sgen/plan]
     (with-temp-db
-      (fn [conn]
-        (let [store (syncopate/store conn)
-              ms    (mapv syncopate/->migration migrations)
+      (fn [conn store]
+        (let [ms    (mapv syncopate/->migration migrations)
               base  (schema-attrs conn)]
           (syncopate/migrate-all! store ms)
           (and (is (every? (schema-attrs conn) (keys attr->def))
@@ -67,19 +71,15 @@
                (is (= base (schema-attrs conn))
                    "schema restored to baseline after full rollback")))))))
 
-;; ---------------------------------------------------------------------------
 ;; 3. "Go ham": arbitrary interleaving of migrate!/rollback-last! tracks a model.
 ;;    (migrate! always applies the next pending, rollback-last! pops the last, so
 ;;    the applied set is always a prefix — the model is just a count.)
-;; ---------------------------------------------------------------------------
-
-(defspec interleaved-migrate-rollback-matches-model 40
+(defspec interleaved-migrate-rollback-matches-model (test-db/gen-count 40)
   (prop/for-all [{:keys [migrations]} sgen/plan
                  ops (gen/vector (gen/elements [:up :down]) 0 30)]
     (with-temp-db
-      (fn [conn]
-        (let [store (syncopate/store conn)
-              ms    (mapv syncopate/->migration migrations)
+      (fn [conn store]
+        (let [ms    (mapv syncopate/->migration migrations)
               base  (schema-attrs conn)
               total (count ms)
               n     (reduce
@@ -103,17 +103,13 @@
                (is (= base (set/difference (schema-attrs conn) live))
                    "schema is exactly baseline plus the applied attrs")))))))
 
-;; ---------------------------------------------------------------------------
 ;; 4. Rich migrations: :tx data + removal :down round-trips schema AND data
 ;;    (exercises apply-delta!'s retract-then-drop with data actually present).
-;; ---------------------------------------------------------------------------
-
-(defspec rich-migrate-rollback-restores-schema-and-data 40
+(defspec rich-migrate-rollback-restores-schema-and-data (test-db/gen-count 40)
   (prop/for-all [{:keys [migrations model]} sgen/rich-plan]
     (with-temp-db
-      (fn [conn]
-        (let [store (syncopate/store conn)
-              ms    (mapv syncopate/->migration migrations)
+      (fn [conn store]
+        (let [ms    (mapv syncopate/->migration migrations)
               base  (schema-attrs conn)]
           (syncopate/migrate-all! store ms)
           (and
@@ -128,18 +124,14 @@
            (is (every? (fn [{:keys [attr]}] (zero? (datom-count conn attr))) model)
                "all data retracted after full rollback")))))))
 
-;; ---------------------------------------------------------------------------
 ;; 5. Irreversible migrations apply, but rollback! throws and leaves them applied.
-;; ---------------------------------------------------------------------------
-
-(defspec irreversible-migrate-then-rollback-throws 100
+(defspec irreversible-migrate-then-rollback-throws (test-db/gen-count 100)
   (prop/for-all [n  gen/nat
                  a  sgen/attr
                  vt sgen/value-type]
     (with-temp-db
-      (fn [conn]
-        (let [store (syncopate/store conn)
-              id    (str "irr" n)
+      (fn [conn store]
+        (let [id    (str "irr" n)
               m     (syncopate/->migration
                      {:id id :irreversible? true :up [{:schema {a {:db/valueType vt}}}]})]
           (syncopate/migrate! store m)
@@ -150,16 +142,12 @@
                (is (= [id] (rp/applied-migration-ids store))
                    "still applied after the failed rollback")))))))
 
-;; ---------------------------------------------------------------------------
 ;; 6. Cross-migration churn: add/remove/re-add over a pool tracks the model.
-;; ---------------------------------------------------------------------------
-
-(defspec churn-add-remove-readd-tracks-model 40
+(defspec churn-add-remove-readd-tracks-model (test-db/gen-count 40)
   (prop/for-all [{:keys [migrations final-live attrs]} sgen/churn-plan]
     (with-temp-db
-      (fn [conn]
-        (let [store (syncopate/store conn)
-              ms    (mapv syncopate/->migration migrations)
+      (fn [conn store]
+        (let [ms    (mapv syncopate/->migration migrations)
               base  (schema-attrs conn)]
           (syncopate/migrate-all! store ms)
           (and
@@ -169,17 +157,13 @@
            (is (= base (schema-attrs conn))
                "baseline restored after full rollback")))))))
 
-;; ---------------------------------------------------------------------------
 ;; 7. Applied-id ordering with heterogeneous ids (applied in id order): the
 ;;    store returns them id-sorted, and rollback-last! pops the highest id.
-;; ---------------------------------------------------------------------------
-
-(defspec applied-ids-ordered-with-heterogeneous-ids 40
+(defspec applied-ids-ordered-with-heterogeneous-ids (test-db/gen-count 40)
   (prop/for-all [{:keys [migrations sorted-ids]} sgen/weird-id-plan]
     (with-temp-db
-      (fn [conn]
-        (let [store (syncopate/store conn)
-              ms    (mapv syncopate/->migration migrations)]
+      (fn [conn store]
+        (let [ms    (mapv syncopate/->migration migrations)]
           (syncopate/migrate-all! store ms)
           (and
            (is (= sorted-ids (rp/applied-migration-ids store))
@@ -188,17 +172,13 @@
            (is (= (vec (butlast sorted-ids)) (rp/applied-migration-ids store))
                "rollback-last! removes the highest id")))))))
 
-;; ---------------------------------------------------------------------------
 ;; 8. (A) fn/symbol data-transform steps round-trip end-to-end: split a
 ;;    :user/name into given/family (a resolved symbol fn), rollback rejoins it.
-;; ---------------------------------------------------------------------------
-
-(defspec fn-step-transform-round-trips 40
+(defspec fn-step-transform-round-trips (test-db/gen-count 40)
   (prop/for-all [names (gen/vector sgen/clean-name 1 8)]
     (with-temp-db
-      (fn [conn]
-        (let [store (syncopate/store conn)
-              setup (syncopate/->migration
+      (fn [conn store]
+        (let [setup (syncopate/->migration
                      {:id "0001" :up {:schema {:user/name {:db/valueType :db.type/string}}}})
               split (syncopate/->migration
                      {:id   "0002"
@@ -225,32 +205,24 @@
                     (set (d/q '[:find [?n ...] :where [?e :user/name ?n]] (d/db conn))))
                  "rollback (join) restored :user/name"))))))))
 
-;; ---------------------------------------------------------------------------
 ;; 9. (B) applied-migration-ids tracks APPLICATION order even for out-of-order ids.
-;; ---------------------------------------------------------------------------
-
-(defspec applied-ids-track-application-order 40
+(defspec applied-ids-track-application-order (test-db/gen-count 40)
   (prop/for-all [ids sgen/distinct-ids]
     (with-temp-db
-      (fn [conn]
-        (let [store (syncopate/store conn)]
-          (doseq [[i id] (map-indexed vector ids)]
-            (syncopate/migrate! store
-              (syncopate/->migration
-               {:id id :up [{:schema {(keyword "gen" (str "o" i)) {:db/valueType :db.type/long}}}]})))
-          (is (= ids (rp/applied-migration-ids store))
-              "applied ids reflect application order, not id-sorted order"))))))
+      (fn [conn store]
+        (doseq [[i id] (map-indexed vector ids)]
+          (syncopate/migrate! store
+            (syncopate/->migration
+             {:id id :up [{:schema {(keyword "gen" (str "o" i)) {:db/valueType :db.type/long}}}]})))
+        (is (= ids (rp/applied-migration-ids store))
+            "applied ids reflect application order, not id-sorted order")))))
 
-;; ---------------------------------------------------------------------------
 ;; 10. (D) exact data values round-trip; explicit :down on an additive migration.
-;; ---------------------------------------------------------------------------
-
-(defspec data-values-exactly-round-trip 30
+(defspec data-values-exactly-round-trip (test-db/gen-count 30)
   (prop/for-all [vals (gen/vector gen/string-alphanumeric 0 6)]
     (with-temp-db
-      (fn [conn]
-        (let [store (syncopate/store conn)
-              a     :gen/sval
+      (fn [conn store]
+        (let [a     :gen/sval
               m     (syncopate/->migration
                      {:id   "0001"
                       :up   [{:schema {a {:db/valueType :db.type/string}}}
@@ -264,12 +236,11 @@
            (do (syncopate/rollback! store m) true)
            (is (zero? (datom-count conn a)) "data + attr gone after rollback")))))))
 
-(defspec explicit-down-on-additive-round-trips 40
+(defspec explicit-down-on-additive-round-trips (test-db/gen-count 40)
   (prop/for-all [attrs (gen/not-empty (gen/set sgen/attr {:max-elements 5}))]
     (with-temp-db
-      (fn [conn]
-        (let [store  (syncopate/store conn)
-              base   (schema-attrs conn)
+      (fn [conn store]
+        (let [base   (schema-attrs conn)
               schema (into {} (map (fn [a] [a {:db/valueType :db.type/long}]) attrs))
               m      (syncopate/->migration
                       {:id "0001" :up [{:schema schema}] :down [{:schema/remove (vec attrs)}]})]

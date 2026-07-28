@@ -28,27 +28,35 @@
     (>= (jdk-major) 24) (conj "--sun-misc-unsafe-memory-access=allow")))
 
 (defn- run-kaocha
-  "Run kaocha in a spawned JVM (with the datalevin JVM flags) with extra `args`."
-  [args]
+  "Run kaocha in a spawned JVM (with `java-opts`) with extra kaocha `args`."
+  [args java-opts]
   (let [basis (b/create-basis {:aliases [:test]})
         cmd   (b/java-command
                {:basis     basis
                 :main      'clojure.main
-                :java-opts (test-java-opts)
+                :java-opts java-opts
                 :main-args (into ["-m" "kaocha.runner"] args)})
         {:keys [exit]} (b/process cmd)]
     (when-not (zero? exit) (throw (ex-info "Tests failed" {})))))
 
 (defn test
-  "Run all the tests."
-  [{:keys [args] :or {args []} :as opts}]
-  (run-kaocha args)
+  "Run the tests. Embedded by default; `:remote true` runs the suite against a
+  client/server datalevin — a SEPARATE server must already be running (see
+  README: `clojure -M:server`), or point elsewhere with `:server-uri
+  \"dtlv://…\"`. Remote runs skip the `^:embedded`-tagged atomicity test. Extra
+  kaocha args via `:args`. `ci` forwards these through."
+  [{:keys [args remote server-uri] :or {args []} :as opts}]
+  (run-kaocha
+   (cond-> args remote (into ["--skip-meta" ":embedded"]))
+   (cond-> (test-java-opts)
+     remote     (conj "-Dsyncopate.test.mode=remote")
+     server-uri (conj (str "-Dsyncopate.test.server-uri=" server-uri))))
   opts)
 
 (defn coverage
   "Run the tests with cloverage coverage reporting (target/coverage/index.html)."
   [{:keys [args] :or {args []} :as opts}]
-  (run-kaocha (into ["--plugin" "cloverage"] args))
+  (run-kaocha (into ["--plugin" "cloverage"] args) (test-java-opts))
   opts)
 
 (defn- pom-template [version]
