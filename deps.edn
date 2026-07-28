@@ -14,4 +14,11 @@
           :jvm-opts ["-Dslf4j.internal.verbosity=WARN"]}
   :dev {:jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
                    "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
-                   "--enable-native-access=ALL-UNNAMED"]}}}
+                   "--enable-native-access=ALL-UNNAMED"]}
+  ;; A real, separate datalevin server for the client/server test run
+  ;; (`clojure -T:build test :remote true` connects to it). Data under
+  ;; data/test-server (gitignored); per-test unique db names keep tests isolated.
+  :server {:main-opts ["-m" "datalevin.main" "serv" "-r" "data/test-server" "-p" "8898"]
+           :jvm-opts  ["--add-opens=java.base/java.nio=ALL-UNNAMED"
+                       "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED"
+                       "--enable-native-access=ALL-UNNAMED"]}}}

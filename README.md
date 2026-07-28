@@ -194,17 +194,36 @@ config). Building `:data` is deferred, so disabled log levels cost effectively n
 
 ## Testing
 
+Embedded (a temporary local Datalevin database):
+
 ```
 clojure -T:build test
 ```
 
-The suite runs against a temporary Datalevin database and covers loading/ordering,
-auto-`:down` derivation, the reversibility guard, a full migrate/rollback
-round-trip (schema *and* data, including a symbol-referenced transform and a
-`.clj` migration), applied-id ordering, the no-schema-pollution invariant,
-error-context propagation, the atomic helpers, the key atomic-rollback
-guarantee (a failing transactional `:up` leaves neither schema change nor
-applied-id behind), and the logging events (captured via a test trove backend).
+Client/server — the same suite run as a **pure client against a real, separate
+datalevin server**. Start one (in another terminal), then run the remote suite:
+
+```
+clojure -M:server                       # datalevin serv on :8898 (data/test-server)
+clojure -T:build test :remote true      # connects to dtlv://…@localhost:8898
+```
+
+Point at an already-running / containerised server instead with
+`clojure -T:build test :remote true :server-uri "dtlv://user:pass@host:port"`.
+`ci` forwards these args (`clojure -T:build ci :remote true`), and CI runs both
+modes. Each test uses a fresh database (embedded a temp dir, remote a unique
+`dtlv://…/t<uuid>` the server auto-creates), so runs are isolated.
+
+The suite covers loading/ordering, auto-`:down` derivation, the reversibility
+guard, a full migrate/rollback round-trip (schema *and* data, including a
+symbol-referenced transform and a `.clj` migration), applied-id ordering, the
+no-schema-pollution invariant, error-context propagation, the atomic helpers, and
+the logging events — plus a generative suite (reduced iteration counts remote).
+The one exception is the atomic-**rollback-on-failure** guarantee (a failing
+transactional `:up` leaves neither schema change nor applied-id behind): that is
+embedded-only — it's the single-transaction fold client/server trades for the
+[two-transaction seam](#atomic-helpers-recommended--fully-atomic-on-embedded), so
+it's tagged `^:embedded` and skipped in the remote run.
 
 ## Notes & limitations
 
