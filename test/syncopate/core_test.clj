@@ -107,6 +107,16 @@
              (set (d/q '[:find [?n ...] :where [?e :user/name ?n]] (d/db *conn*)))))
       (is (= ["0001-add-users"] (rp/applied-migration-ids *store*))))))
 
+(deftest status-mid-migration
+  ;; status's whole point is the partial view; assert it mid-way, not just at the
+  ;; all-pending / none-pending endpoints.
+  (let [ms (migrations)]
+    (syncopate/migrate! *store* (first ms))            ;apply only 0001
+    (is (= {:applied ["0001-add-users"]
+            :pending ["0002-split-names" "0003-seed-departments"]}
+           (syncopate/status *store* ms))
+        "status shows the partial split: first applied, the rest pending")))
+
 (deftest atomic-migrate-and-rollback
   (let [ms (migrations)]
     (syncopate/migrate-all! *store* ms)
