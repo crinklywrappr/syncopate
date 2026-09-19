@@ -1,0 +1,99 @@
+name: datalevin-watch
+
+# Polls Clojars for new datalevin releases and keeps the supported test matrix
+# (deps.edn's :ci :datalevin/versions) current. There is no GitHub event for a
+# third-party release, so this runs on a weekly schedule (+ manual dispatch).
+#
+# All the logic lives in `clojure -T:build bump-matrix` (testable), which prints
+# a one-line JSON status as its LAST stdout line and, on a bump, edits deps.edn
+# in place. We branch on that status:
+#   bump  -> open/refresh a PR with the edited deps.edn (PR CI validates it)
+#   major -> open an issue instead (a new major may break the API; a human looks)
+#   none  -> do nothing
+#
+# The PR is opened with a PAT (secret GH_PAT), not GITHUB_TOKEN — a PR authored by
+# the default token does NOT trigger the `pull_request` CI, so the matrix would
+# never actually run. GH_PAT needs (fine-grained, this repo): Contents R/W,
+# Pull requests R/W, Issues R/W, Metadata R. No Workflows scope: we edit deps.edn,
+# not a file under .github/workflows/.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # weekly, Monday 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read          # GH_PAT performs all writes (branch push, PR, issue)
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: ${{ runner.os }}-cljdeps-${{ hashFiles('deps.edn') }}
+          restore-keys: ${{ runner.os }}-cljdeps-
+
+      - name: Check Clojars, update matrix
+        id: bump
+        run: |
+          RESULT="$(clojure -T:build bump-matrix | tail -n1)"
+          echo "$RESULT" | jq .
+          {
+            echo "result=$RESULT"
+            echo "action=$(echo "$RESULT" | jq -r .action)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open PR to expand the matrix
+        if: steps.bump.outputs.action == 'bump'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GH_PAT }}
+          base: master
+          branch: bot/datalevin-matrix
+          delete-branch: true
+          commit-message: "ci: expand datalevin test matrix"
+          title: "Expand datalevin test matrix for new datalevin release(s)"
+          body: |
+            The `datalevin-watch` workflow detected new datalevin release(s) on
+            Clojars and updated the supported matrix in `deps.edn`
+            (`:ci :datalevin/versions`).
+
+            Growth policy: floor + newest-3 (the pinned floor is never moved
+            automatically). Merging this runs the full matrix against the new
+            version(s) via the normal PR CI.
+
+            ```json
+            ${{ steps.bump.outputs.result }}
+            ```
+
+      - name: Open issue for new datalevin major
+        if: steps.bump.outputs.action == 'major'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh label create datalevin-major \
+            --description "New datalevin major version needs a support review" \
+            --color B60205 2>/dev/null || true
+          if [ "$(gh issue list --label datalevin-major --state open --json number --jq 'length')" -gt 0 ]; then
+            echo "An open datalevin-major issue already exists; skipping."
+            exit 0
+          fi
+          VERSION="$(echo '${{ steps.bump.outputs.result }}' | jq -r .version)"
+          gh issue create \
+            --label datalevin-major \
+            --title "datalevin $VERSION released (new major) — review support" \
+            --body "datalevin **$VERSION** is a new *major* version, so the watcher did not auto-add it to the test matrix (a major bump may break the API syncopate relies on). Review the changes, and if syncopate still works, bump the floor / matrix in \`deps.edn\` (\`:ci :datalevin/versions\`) manually."
