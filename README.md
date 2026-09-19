@@ -51,58 +51,73 @@ A migration spec is a map:
 ```clojure
 {:id           "0002-split-names"   ; optional; defaults to the filename
  :up           <step | [step ...]>
- :down         <step | [step ...]>  ; optional if :up is purely additive
+ :down         <step | [step ...]>  ; optional if every :up step is :schema/create
  :transaction? true                 ; optional, default true
  :irreversible? false}              ; optional
 ```
 
 A **step** is one of:
 
-| Step                          | Meaning                                            |
-|-------------------------------|----------------------------------------------------|
-| `{:schema {attr def ...}}`    | add/update attributes (via `update-schema`)        |
-| `{:schema/remove [attr ...]}` | retract every datom of the attrs, then drop them   |
-| `{:tx [tx-data ...]}`         | raw `transact!` data                               |
-| `a.namespace/fn-symbol`       | resolved to `(fn [conn] ...)` and called           |
-| an actual `(fn [conn] ...)`   | only in `.clj` migration files                     |
+| Step                           | Meaning                                                   |
+|--------------------------------|-----------------------------------------------------------|
+| `{:schema/create {attr def …}}` | add **new** attributes (auto-invertible)                 |
+| `{:schema/alter {attr def …}}`  | modify **existing** attributes' definitions (needs `:down`) |
+| `{:schema/remove [attr ...]}`  | retract every datom of the attrs, then drop them          |
+| `{:tx [tx-data ...]}`          | raw `transact!` data                                      |
+| `a.namespace/fn-symbol`        | resolved to `(fn [conn] ...)` and called                  |
+| an actual `(fn [conn] ...)`    | only in `.clj` migration files                            |
+
+`:schema/create` and `:schema/alter` both apply their `attr → definition` map via
+`update-schema`; the distinction is **declared intent**, which decides how the
+migration rolls back. See [`doc/schema-migrations.md`](doc/schema-migrations.md)
+for the full model (and why the old ambiguous `:schema` step was removed).
 
 ### Sugar for elision
 
 - `:up`/`:down` may be a single step instead of a vector.
 - **Omit `:down`** and Syncopate derives it automatically — *iff* every `:up`
-  step is a purely additive schema delta (adding attrs inverts to removing them).
-  If `:up` contains a removal, a `:tx`, or a function, supply `:down` explicitly
-  or set `:irreversible? true`; otherwise you get a clear build-time error.
+  step is a `:schema/create` (creating attrs inverts to removing them). If `:up`
+  contains a `:schema/alter`, a `:schema/remove`, a `:tx`, or a function, supply
+  `:down` explicitly or set `:irreversible? true`; otherwise you get a clear
+  build-time error.
 
 ### Examples
 
 Purely additive — `:down` is derived (`resources/migrations/0001-add-users.edn`):
 
 ```clojure
-{:up {:schema {:user/id   {:db/valueType :db.type/long
-                           :db/unique    :db.unique/identity}
-               :user/name {:db/valueType :db.type/string}}}}
+{:up {:schema/create {:user/id   {:db/valueType :db.type/long
+                                  :db/unique    :db.unique/identity}
+                      :user/name {:db/valueType :db.type/string}}}}
 ```
 
 Schema change plus a data transform referenced by symbol
 (`resources/migrations/0002-split-names.edn`):
 
 ```clojure
-{:up   [{:schema {:user/given-name  {:db/valueType :db.type/string}
-                  :user/family-name {:db/valueType :db.type/string}}}
+{:up   [{:schema/create {:user/given-name  {:db/valueType :db.type/string}
+                         :user/family-name {:db/valueType :db.type/string}}}
         my-app.migrations/split-user-names
         {:schema/remove [:user/name]}]
- :down [{:schema {:user/name {:db/valueType :db.type/string}}}
+ :down [{:schema/create {:user/name {:db/valueType :db.type/string}}}
         my-app.migrations/join-user-names
         {:schema/remove [:user/given-name :user/family-name]}]}
+```
+
+Modifying an existing attribute — `:schema/alter` needs an explicit `:down` that
+describes the **inverse change** (see `doc/schema-migrations.md`):
+
+```clojure
+{:up   {:schema/alter {:user/email {:db/index true}}}
+ :down {:schema/alter {:user/email {:db/index false}}}}
 ```
 
 A `.clj` migration, whose steps may be real functions
 (`resources/migrations/0003-seed-departments.clj`):
 
 ```clojure
-{:up   [{:schema {:dept/name {:db/valueType :db.type/string
-                              :db/unique    :db.unique/identity}}}
+{:up   [{:schema/create {:dept/name {:db/valueType :db.type/string
+                                     :db/unique    :db.unique/identity}}}
         (fn [conn]
           (datalevin.core/transact! conn [{:dept/name "Engineering"}]))]
  :down [(fn [conn] ...)
@@ -200,6 +215,13 @@ Embedded (a temporary local Datalevin database):
 clojure -T:build test
 ```
 
+Run the embedded suite against **every supported Datalevin version** at once (the
+`:ci` matrix in `deps.edn` — the same versions CI runs):
+
+```
+clojure -T:build test-all
+```
+
 Client/server — the same suite run as a **pure client against a real, separate
 datalevin server**. Start one (in another terminal), then run the remote suite:
 
@@ -239,9 +261,17 @@ it's tagged `^:embedded` and skipped in the remote run.
 - Auto-derived `:down` only covers additive schema deltas; anything that removes
   attributes, transacts data, or runs a function needs an explicit `:down` (the
   prior state can't be inferred).
-- Reaching the connection's LMDB handle uses Datalevin internals
-  (`(.lmdb (:store @conn))` embedded; the remote store's `:uri` + `open-kv` for
-  client/server); verified against Datalevin 1.0.0.
+- The applied-migration state lives in a KV DBI on the connection's own
+  environment. Embedded stores reach that handle via Datalevin's supported
+  `datalog-kv`; client/server stores open a KV client to the same database
+  (the remote store's `:uri` + `open-kv`).
+- **Supported Datalevin range: see `deps.edn`.** The `:ci` alias's
+  `:datalevin/versions` vector is the source of truth for the tested range. The
+  `:deps` dependency is pinned to the *floor* (the lowest supported version), not
+  the newest — a plain `:mvn/version` is a soft/minimum constraint. CI reads that
+  vector to run the embedded suite across every supported version and the
+  client/server suite at the floor and newest; `clojure -T:build test-all` runs the
+  whole range locally.
 - **Client/server** (`dtlv://`) is supported: the store opens a KV client to the
   same server database (sharing the datalog connection's env). Call
   `(syncopate/close! store)` when done to release that client (no-op for embedded).
