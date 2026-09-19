@@ -258,15 +258,11 @@ it's tagged `^:embedded` and skipped in the remote run.
   environment. Embedded stores reach that handle via Datalevin's supported
   `datalog-kv`; client/server stores open a KV client to the same database
   (the remote store's `:uri` + `open-kv`).
-- **Supported Datalevin: 1.0.1 and up** (tested through 1.1.0). The `deps.edn`
-  dependency is pinned to the *floor* (1.0.1), not the newest — a plain
-  `:mvn/version` is a soft/minimum constraint, so pinning the floor lets your app
-  pick its own Datalevin (a top-level dep wins in tools.deps; nearest-wins in
-  Maven/Leiningen) without Syncopate dragging you up. 1.0.1 is the floor because
-  `datalog-kv` exists from 1.0.0 but `update-schema` only *patches* (merges) an
-  existing attribute from 1.0.1 on — 1.0.0 replaces it, which would silently
-  corrupt `:schema/alter`. CI runs the embedded suite against 1.0.1, 1.0.2, and
-  1.1.0, and the client/server suite against the floor and newest (1.0.1, 1.1.0).
+- **Supported Datalevin range: see `deps.edn`.** The dependency there is pinned to
+  the *floor* (the lowest supported version), not the newest — a plain
+  `:mvn/version` is a soft/minimum constraint. CI runs the embedded suite across all
+  supported versions and the client/server suite at the floor and newest — the
+  `:dl-*` aliases in `deps.edn` list the versions covered.
 - **Client/server** (`dtlv://`) is supported: the store opens a KV client to the
   same server database (sharing the datalog connection's env). Call
   `(syncopate/close! store)` when done to release that client (no-op for embedded).
