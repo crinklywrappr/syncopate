@@ -66,7 +66,7 @@
   rejected rather than silently reduced to one. (An empty map names nothing and is
   not ambiguous; it falls through to :unknown.)"
   [step]
-  (and (map? step) (< 1 (count step))))
+  (and (map? step) (> (count step) 1)))
 
 (defn- step-phase [step]
   (cond (symbol? step)               :fn
