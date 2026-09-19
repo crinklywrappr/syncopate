@@ -28,9 +28,12 @@
     (>= (jdk-major) 24) (conj "--sun-misc-unsafe-memory-access=allow")))
 
 (defn- run-kaocha
-  "Run kaocha in a spawned JVM (with `java-opts`) with extra kaocha `args`."
-  [args java-opts]
-  (let [basis (b/create-basis {:aliases [:test]})
+  "Run kaocha in a spawned JVM (with `java-opts`) with extra kaocha `args`.
+  `extra-aliases` are layered onto `:test` when building the spawned JVM's basis
+  — this is how a `:dl-*` datalevin-version override actually reaches the test
+  classpath (the basis, not the outer -T:build JVM, is what tests run against)."
+  [args java-opts extra-aliases]
+  (let [basis (b/create-basis {:aliases (into [:test] extra-aliases)})
         cmd   (b/java-command
                {:basis     basis
                 :main      'clojure.main
@@ -44,19 +47,22 @@
   client/server datalevin — a SEPARATE server must already be running (see
   README: `clojure -M:server`), or point elsewhere with `:server-uri
   \"dtlv://…\"`. Remote runs skip the `^:embedded`-tagged atomicity test. Extra
-  kaocha args via `:args`. `ci` forwards these through."
-  [{:keys [args remote server-uri] :or {args []} :as opts}]
+  kaocha args via `:args`. `:dl \"1.0.2\"` runs against a specific supported
+  datalevin version via the matching `:dl-<version>` alias (default = the floor
+  pinned in deps.edn; see the support matrix there). `ci` forwards these through."
+  [{:keys [args remote server-uri dl] :or {args []} :as opts}]
   (run-kaocha
    (cond-> args remote (into ["--skip-meta" ":embedded"]))
    (cond-> (test-java-opts)
      remote     (conj "-Dsyncopate.test.mode=remote")
-     server-uri (conj (str "-Dsyncopate.test.server-uri=" server-uri))))
+     server-uri (conj (str "-Dsyncopate.test.server-uri=" server-uri)))
+   (when dl [(keyword (str "dl-" dl))]))
   opts)
 
 (defn coverage
   "Run the tests with cloverage coverage reporting (target/coverage/index.html)."
   [{:keys [args] :or {args []} :as opts}]
-  (run-kaocha (into ["--plugin" "cloverage"] args) (test-java-opts))
+  (run-kaocha (into ["--plugin" "cloverage"] args) (test-java-opts) nil)
   opts)
 
 (defn- pom-template [version]
