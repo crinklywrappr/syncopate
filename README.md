@@ -265,7 +265,8 @@ it's tagged `^:embedded` and skipped in the remote run.
   Maven/Leiningen) without Syncopate dragging you up. 1.0.1 is the floor because
   `datalog-kv` exists from 1.0.0 but `update-schema` only *patches* (merges) an
   existing attribute from 1.0.1 on — 1.0.0 replaces it, which would silently
-  corrupt `:schema/alter`. CI runs the suite against 1.0.1, 1.0.2, and 1.1.0.
+  corrupt `:schema/alter`. CI runs the embedded suite against 1.0.1, 1.0.2, and
+  1.1.0, and the client/server suite against the floor and newest (1.0.1, 1.1.0).
 - **Client/server** (`dtlv://`) is supported: the store opens a KV client to the
   same server database (sharing the datalog connection's env). Call
   `(syncopate/close! store)` when done to release that client (no-op for embedded).
