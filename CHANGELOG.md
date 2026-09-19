@@ -7,7 +7,7 @@ All notable changes to this project will be documented in this file. This change
   `:schema/alter`.** The old `:schema` step was ambiguous — it could add new
   attributes or modify existing ones — and Syncopate auto-derived a `:down` that
   *dropped* the attributes and retracted their data, silently destroying data
-  when the step had actually modified an existing attribute. Datalevin 1.1.0 makes
+  when the step had actually modified an existing attribute. Datalevin 1.0.1+ makes
   `update-schema` patch (merge) existing attribute definitions, turning attribute
   updates into a first-class operation and making that footgun reachable in normal
   use. Migrations now declare intent: `:schema/create` (new attributes,
@@ -18,7 +18,15 @@ All notable changes to this project will be documented in this file. This change
   exactly one operation (a `:tx` or a single schema op); a map naming more than
   one is rejected with a clear error rather than silently keeping one and dropping
   the rest. See `doc/schema-migrations.md`.
-- **Datalevin bumped to 1.1.0** (from 1.0.0).
+- **Datalevin dependency now pinned to the supported floor, 1.0.1** (was a hard
+  pin at 1.1.0, previously 1.0.0). A plain `:mvn/version` is a soft/minimum
+  constraint, so pinning the floor — rather than the newest — lets consumers pick
+  their own Datalevin (top-level dep wins in tools.deps; nearest-wins in
+  Maven/Leiningen) without Syncopate forcing an upgrade. 1.0.1 is the floor
+  because `update-schema`'s patch semantics (required by `:schema/alter`) land in
+  1.0.1; 1.0.0 replaces instead. A `:dl-*` alias matrix in `deps.edn` and CI run
+  the embedded suite against 1.0.1, 1.0.2, and 1.1.0, and the client/server suite
+  (matched server+client) against the floor and newest (1.0.1, 1.1.0).
 - `store`'s embedded KV handle is now obtained via Datalevin's supported
   `datalog-kv` rather than reaching into `datalevin.storage.Store` internals.
 

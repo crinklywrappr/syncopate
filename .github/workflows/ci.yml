@@ -6,8 +6,72 @@ on:
     branches: [master]
 
 jobs:
+  # Prove the supported Datalevin range (floor .. newest). deps.edn pins the
+  # floor; each :dl-<version> alias overrides it for one embedded run.
+  test-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        datalevin: ['1.0.1', '1.0.2', '1.1.0']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: ${{ runner.os }}-cljdeps-${{ hashFiles('deps.edn') }}
+          restore-keys: ${{ runner.os }}-cljdeps-
+      - name: Test (embedded, datalevin ${{ matrix.datalevin }})
+        run: clojure -T:build test :dl '"${{ matrix.datalevin }}"'
+
+  # Client/server (dtlv://) suite against a REAL, separate datalevin server, with
+  # server AND client on the SAME version (matched, never skewed — we test our
+  # code across versions, not datalevin's wire compat). Each cell is slower than
+  # embedded (every assertion is a network round-trip), so we run only the FLOOR
+  # and the NEWEST supported version, not every one in between.
+  remote:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        datalevin: ['1.0.1', '1.1.0']   # floor + newest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: ${{ runner.os }}-cljdeps-${{ hashFiles('deps.edn') }}
+          restore-keys: ${{ runner.os }}-cljdeps-
+      - name: Test (client/server, datalevin ${{ matrix.datalevin }})
+        # Server gets the version via the :dl-<v> alias composed onto :server;
+        # client gets it via :dl. Both must match.
+        run: |
+          clojure -M:server:dl-${{ matrix.datalevin }} & echo $! > /tmp/dtlv.pid
+          for i in $(seq 1 60); do (exec 3<>/dev/tcp/127.0.0.1/8898) 2>/dev/null && break; sleep 1; done
+          clojure -T:build test :remote true :dl '"${{ matrix.datalevin }}"'
+          kill "$(cat /tmp/dtlv.pid)" || true
+
   ci:
     runs-on: ubuntu-latest
+    needs: [test-matrix, remote]   # deploy only after the whole support matrix is green
     permissions:
       contents: write            # push the release tag on master
     steps:
@@ -32,20 +96,11 @@ jobs:
           key: ${{ runner.os }}-cljdeps-${{ hashFiles('deps.edn') }}
           restore-keys: ${{ runner.os }}-cljdeps-
 
-      - name: Test (client/server)
-        # Run the suite as a pure client against a REAL, separate datalevin
-        # server process (not in-process) — the client/server boundary is the
-        # thing under test. Swap for a datalevin service container via
-        # `:server-uri` if stronger isolation is ever wanted.
-        run: |
-          clojure -M:server & echo $! > /tmp/dtlv.pid
-          for i in $(seq 1 60); do (exec 3<>/dev/tcp/127.0.0.1/8898) 2>/dev/null && break; sleep 1; done
-          clojure -T:build test :remote true
-          kill "$(cat /tmp/dtlv.pid)" || true
-
-      - name: Test + build
-        # Existing embedded suite + jar build (runs once).
-        run: clojure -T:build ci
+      - name: Build
+        # Just package the JAR. The `test-matrix` (embedded, incl. the floor) and
+        # `remote` jobs cover the suite and gate this job via `needs`, so there's
+        # no need to re-run tests before building/deploying.
+        run: clojure -T:build jar
 
       - name: Deploy to Clojars
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
