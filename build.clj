@@ -91,10 +91,10 @@
           :src-dirs  ["src"]
           :pom-data  (pom-template version)))
 
-(defn ci
-  "Run the CI pipeline of tests (and build the JAR)."
+(defn jar
+  "Build the JAR (pom + sources), no tests. In CI the `test-matrix` and `remote`
+  jobs already cover the suite, so the deploy job only needs to package."
   [opts]
-  (test opts)
   (b/delete {:path "target"})
   (let [opts (jar-opts opts)]
     (println "\nWriting pom.xml...")
@@ -104,6 +104,12 @@
     (println "\nBuilding JAR..." (:jar-file opts))
     (b/jar opts))
   opts)
+
+(defn ci
+  "Run the tests, then build the JAR (local convenience: `jar` gated by `test`)."
+  [opts]
+  (test opts)
+  (jar opts))
 
 (defn install
   "Install the JAR locally."

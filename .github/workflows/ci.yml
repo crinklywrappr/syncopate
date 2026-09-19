@@ -96,11 +96,11 @@ jobs:
           key: ${{ runner.os }}-cljdeps-${{ hashFiles('deps.edn') }}
           restore-keys: ${{ runner.os }}-cljdeps-
 
-      - name: Test + build
-        # Embedded suite (at the pinned floor) + jar build. Cross-version embedded
-        # coverage is the `test-matrix` job; client/server is the `remote` job —
-        # both gate this via `needs`, so this is the final build/deploy step.
-        run: clojure -T:build ci
+      - name: Build
+        # Just package the JAR. The `test-matrix` (embedded, incl. the floor) and
+        # `remote` jobs cover the suite and gate this job via `needs`, so there's
+        # no need to re-run tests before building/deploying.
+        run: clojure -T:build jar
 
       - name: Deploy to Clojars
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
