@@ -254,9 +254,18 @@ it's tagged `^:embedded` and skipped in the remote run.
 - Auto-derived `:down` only covers additive schema deltas; anything that removes
   attributes, transacts data, or runs a function needs an explicit `:down` (the
   prior state can't be inferred).
-- Reaching the connection's LMDB handle uses Datalevin internals
-  (`(.lmdb (:store @conn))` embedded; the remote store's `:uri` + `open-kv` for
-  client/server); verified against Datalevin 1.0.0.
+- The applied-migration state lives in a KV DBI on the connection's own
+  environment. Embedded stores reach that handle via Datalevin's supported
+  `datalog-kv`; client/server stores open a KV client to the same database
+  (the remote store's `:uri` + `open-kv`).
+- **Supported Datalevin: 1.0.1 and up** (tested through 1.1.0). The `deps.edn`
+  dependency is pinned to the *floor* (1.0.1), not the newest — a plain
+  `:mvn/version` is a soft/minimum constraint, so pinning the floor lets your app
+  pick its own Datalevin (a top-level dep wins in tools.deps; nearest-wins in
+  Maven/Leiningen) without Syncopate dragging you up. 1.0.1 is the floor because
+  `datalog-kv` exists from 1.0.0 but `update-schema` only *patches* (merges) an
+  existing attribute from 1.0.1 on — 1.0.0 replaces it, which would silently
+  corrupt `:schema/alter`. CI runs the suite against 1.0.1, 1.0.2, and 1.1.0.
 - **Client/server** (`dtlv://`) is supported: the store opens a KV client to the
   same server database (sharing the datalog connection's env). Call
   `(syncopate/close! store)` when done to release that client (no-op for embedded).

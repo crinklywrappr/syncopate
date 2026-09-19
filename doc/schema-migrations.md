@@ -52,7 +52,7 @@ touch an existing one.
 
 ## Writing a `:schema/alter` `:down`
 
-Datalevin (1.1.0+) **patches** an attribute's definition: `update-schema` with a
+Datalevin (1.0.1+) **patches** an attribute's definition: `update-schema` with a
 partial map *merges* into the existing definition rather than replacing it. Two
 consequences for rollbacks:
 
