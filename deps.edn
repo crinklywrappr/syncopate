@@ -2,8 +2,8 @@
  ;; datalevin is pinned to the LOWEST version we support (the floor), not the
  ;; newest. A plain :mvn/version is a soft/minimum constraint: pinning the floor
  ;; lets consumers choose their own datalevin (a top-level dep wins in tools.deps;
- ;; nearest-wins in Maven/Leiningen) without us dragging anyone up. The `:dl-*`
- ;; test aliases below prove we still work up to the newest supported version.
+ ;; nearest-wins in Maven/Leiningen) without us dragging anyone up. The `:ci`
+ ;; alias below lists the versions we actually test up to the newest supported.
  ;; Floor = 1.0.1: `datalog-kv` exists (1.0.0+) AND `update-schema` PATCHES an
  ;; existing attr rather than replacing it (1.0.1+) — 1.0.0 clobbers, which would
  ;; silently corrupt `:schema/alter`, so it is not supported.
@@ -16,16 +16,20 @@
          :extra-deps {org.clojure/test.check {:mvn/version "1.1.3"}
                       lambdaisland/kaocha {:mvn/version "1.91.1392"}
                       lambdaisland/kaocha-cloverage {:mvn/version "1.1.89"}}}
-  ;; datalevin support matrix. Each alias overrides the version so we can run the
-  ;; suite against the whole supported range (floor .. newest). Selected via
-  ;; `clojure -T:build test :dl "1.0.2"` (build.clj layers the matching alias onto
-  ;; the spawned test JVM's basis). :override-deps replaces the version of a lib
-  ;; already in :deps.
-  :dl-1.0.1 {:override-deps {datalevin/datalevin {:mvn/version "1.0.1"}}}
-  :dl-1.0.2 {:override-deps {datalevin/datalevin {:mvn/version "1.0.2"}}}
-  :dl-1.1.0 {:override-deps {datalevin/datalevin {:mvn/version "1.1.0"}}}
+  ;; SOURCE OF TRUTH for the datalevin support matrix (floor .. newest). CI reads
+  ;; this to build its test matrix (`clojure -T:build matrix`), `test-all` runs
+  ;; the whole range locally, and the scheduled `datalevin-watch` workflow appends
+  ;; new releases here via `bump-matrix`. Data-only alias (never activated), so it
+  ;; doesn't affect resolution. Embedded suite runs every version; the client/
+  ;; server suite runs the min and max. Any one version is selectable via
+  ;; `clojure -T:build test :dl "1.0.2"` (build.clj injects it as an :extra dep).
+  :ci {:datalevin/versions ["1.0.1" "1.0.2" "1.1.0"]}
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}
-                 slipset/deps-deploy {:mvn/version "0.2.5"}}
+                 slipset/deps-deploy {:mvn/version "0.2.5"}
+                 ;; matrix single-sourcing: structural deps.edn edits (bump-matrix)
+                 ;; + Clojars JSON parsing (bump-matrix) / JSON matrix output (matrix)
+                 rewrite-clj/rewrite-clj {:mvn/version "1.1.48"}
+                 org.clojure/data.json {:mvn/version "2.5.1"}}
           :ns-default build
           :jvm-opts ["-Dslf4j.internal.verbosity=WARN"]}
   :dev {:jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
