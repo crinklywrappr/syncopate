@@ -44,27 +44,43 @@
   [step]
   (and (map? step) (contains? step :schema)))
 
-(defn schema-delta?
-  "True if `step` is a well-formed schema operation: a map carrying exactly one of
-  `:schema/create` / `:schema/alter` (attr keyword -> definition map) or
-  `:schema/remove` (collection of attr keywords). Malformed or ambiguous shapes
-  are rejected so they surface early rather than as a cryptic Datalevin error."
+;; Each predicate is self-contained and O(1): a step-map has exactly one key, and
+;; it is this op, well-shaped. `(count m)` is O(1) on a Clojure map, so there is
+;; no repeated key-seq scanning across create?/alter?/remove?.
+
+(defn create?
+  "True if `step` is a well-formed `:schema/create` step and names nothing else."
   [step]
-  (and (map? step)
-       (let [create? (contains? step :schema/create)
-             alter?  (contains? step :schema/alter)
-             remove? (contains? step :schema/remove)]
-         (and (= 1 (count (filter true? [create? alter? remove?])))
-              (or (not create?) (attrs-map? (:schema/create step)))
-              (or (not alter?)  (attrs-map? (:schema/alter step)))
-              (or (not remove?) (attr-coll? (:schema/remove step)))))))
+  (and (map? step) (== 1 (count step))
+       (contains? step :schema/create)
+       (attrs-map? (:schema/create step))))
+
+(defn alter?
+  "True if `step` is a well-formed `:schema/alter` step and names nothing else."
+  [step]
+  (and (map? step) (== 1 (count step))
+       (contains? step :schema/alter)
+       (attrs-map? (:schema/alter step))))
+
+(defn remove?
+  "True if `step` is a well-formed `:schema/remove` step and names nothing else."
+  [step]
+  (and (map? step) (== 1 (count step))
+       (contains? step :schema/remove)
+       (attr-coll? (:schema/remove step))))
+
+(defn schema-delta?
+  "True if `step` is a well-formed single schema operation — a `create?`, `alter?`
+  or `remove?` step. A map naming more than one op is `ambiguous?`, not a delta
+  (and is rejected with a clear error where migrations are built/run)."
+  [step]
+  (or (create? step) (alter? step) (remove? step)))
 
 (defn additive?
   "True if `step` is a `:schema/create` — the only operation we can automatically
   invert (its :down removes the just-created attributes)."
   [step]
-  (and (schema-delta? step)
-       (contains? step :schema/create)))
+  (create? step))
 
 (defn invert
   "Invert a `:schema/create`: creating attrs becomes removing them. Only valid for
@@ -101,19 +117,19 @@
   retracts every datom of each attr before dropping it."
   [conn step]
   (cond
-    (contains? step :schema/create)
+    (create? step)
     (do (trove/log! {:level :debug :id :syncopate/schema-delta
                      :msg  "Applying schema operation"
                      :data {:op :create :attrs (vec (keys (:schema/create step)))}})
         (d/update-schema conn (:schema/create step)))
 
-    (contains? step :schema/alter)
+    (alter? step)
     (do (trove/log! {:level :debug :id :syncopate/schema-delta
                      :msg  "Applying schema operation"
                      :data {:op :alter :attrs (vec (keys (:schema/alter step)))}})
         (d/update-schema conn (:schema/alter step)))
 
-    (contains? step :schema/remove)
+    (remove? step)
     (do (trove/log! {:level :debug :id :syncopate/schema-delta
                      :msg  "Applying schema operation"
                      :data {:op :remove :attrs (vec (:schema/remove step))}})

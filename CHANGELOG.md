@@ -14,8 +14,10 @@ All notable changes to this project will be documented in this file. This change
   auto-invertible) vs `:schema/alter` (modify existing attributes, requires an
   explicit `:down`); `:schema/remove` is unchanged. Bare `:schema` is rejected at
   `->migration` with an actionable error that forks create-vs-alter and, for a
-  purely-additive `:up`, prints the `:down` to copy-paste. Each schema step now
-  carries exactly one operation. See `doc/schema-migrations.md`.
+  purely-additive `:up`, prints the `:down` to copy-paste. Each step performs
+  exactly one operation (a `:tx` or a single schema op); a map naming more than
+  one is rejected with a clear error rather than silently keeping one and dropping
+  the rest. See `doc/schema-migrations.md`.
 - **Datalevin bumped to 1.1.0** (from 1.0.0).
 - `store`'s embedded KV handle is now obtained via Datalevin's supported
   `datalog-kv` rather than reaching into `datalevin.storage.Store` internals.

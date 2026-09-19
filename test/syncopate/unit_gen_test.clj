@@ -9,9 +9,10 @@
             [syncopate.schema :as schema]))
 
 ;; private fns under test
-(def ^:private as-steps     #'core/as-steps)
-(def ^:private step-phase   #'core/step-phase)
-(def ^:private step-summary #'core/step-summary)
+(def ^:private as-steps        #'core/as-steps)
+(def ^:private step-phase      #'core/step-phase)
+(def ^:private step-summary    #'core/step-summary)
+(def ^:private ambiguous-step? #'core/ambiguous-step?)
 
 ;; ---------------------------------------------------------------------------
 ;; syncopate.schema/invert
@@ -47,6 +48,19 @@
 (defspec malformed-deltas-are-rejected 500
   (prop/for-all [d sgen/malformed-delta]
     (and (not (schema/schema-delta? d)) (not (schema/additive? d)))))
+
+(defspec ambiguous-steps-are-not-deltas 500
+  (prop/for-all [d sgen/ambiguous-delta]
+    (and (ambiguous-step? d)
+         (not (schema/schema-delta? d))
+         (not (schema/additive? d)))))
+
+(defspec ambiguous-steps-throw-at-build 200
+  (prop/for-all [d  sgen/ambiguous-delta
+                 id (gen/fmap str gen/nat)]
+    (try (core/->migration {:id id :up d}) false
+         (catch clojure.lang.ExceptionInfo e
+           (boolean (:syncopate/ambiguous-step (ex-data e)))))))
 
 (defspec additive-iff-schema-delta-that-creates 1000
   (prop/for-all [s sgen/step]

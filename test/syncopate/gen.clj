@@ -126,11 +126,11 @@
                (gen/vector gen/string-alphanumeric 1 4)]))
 
 (def malformed-delta
-  "Maps that name a schema op with a wrong-shaped value, or name more than one op."
+  "Maps that name a single schema op with a wrong-shaped value. (A map naming more
+  than one op is `ambiguous-delta`, a distinct error category.)"
   (gen/one-of [(gen/fmap (fn [v] {:schema/create v}) malformed-schema-val)
                (gen/fmap (fn [v] {:schema/alter v})  malformed-schema-val)
-               (gen/fmap (fn [v] {:schema/remove v}) malformed-remove-val)
-               ambiguous-delta]))
+               (gen/fmap (fn [v] {:schema/remove v}) malformed-remove-val)]))
 
 (def step
   "Any migration step shape — drives the step-phase / step-summary specs."

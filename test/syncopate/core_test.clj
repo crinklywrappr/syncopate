@@ -313,6 +313,20 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"obsolete"
                             (run-step! *conn* {:schema {:x/y {}}}))))))
 
+(deftest ambiguous-step-rejected
+  (testing "->migration rejects a step naming more than one schema op"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"more than one operation"
+                          (syncopate/->migration
+                           {:id "amb" :up {:schema/create {:a/b {}} :schema/remove [:c/d]}}))))
+  (testing "mixing :tx with a schema op is ambiguous too"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"more than one operation"
+                          (syncopate/->migration
+                           {:id "mix" :up {:tx [] :schema/create {:a/b {}}}}))))
+  (testing "run-step! rejects it too, with actionable text"
+    (let [run-step! #'syncopate/run-step!]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"exactly one of"
+                            (run-step! *conn* {:tx [] :schema/create {:a/b {:db/valueType :db.type/string}}}))))))
+
 (deftest alter-requires-explicit-down
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not purely :schema/create"
                         (syncopate/->migration

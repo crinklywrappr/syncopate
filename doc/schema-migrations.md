@@ -1,7 +1,11 @@
 # Schema migrations: create, alter, remove
 
-Syncopate models schema changes as three declarative operations, each carrying
-exactly one operation per step. They split along **two orthogonal axes**.
+Syncopate models schema changes as three declarative operations. A step performs
+**exactly one** operation — one schema op, or a `:tx` data step; a map naming more
+than one (e.g. both `:schema/create` and `:schema/remove`, or `:tx` alongside a
+schema op) is rejected with an error when the migration is built or run — it is
+never silently reduced to one. The three schema operations split along **two
+orthogonal axes**.
 
 ## The two axes
 

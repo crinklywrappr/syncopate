@@ -54,11 +54,26 @@
         (vector? x) x
         :else       [x]))
 
+(defn- tx?
+  "True if `step` is a raw-transaction step: a `:tx` map naming nothing else."
+  [step]
+  (and (map? step) (== 1 (count step)) (contains? step :tx)))
+
+(defn- ambiguous-step?
+  "True if map `step` has more than one key. A well-formed step is a
+  single-operation map (see `tx?` and the `syncopate.schema` predicates), so a map
+  with several keys — whether it combines operations or carries a stray key — is
+  rejected rather than silently reduced to one. (An empty map names nothing and is
+  not ambiguous; it falls through to :unknown.)"
+  [step]
+  (and (map? step) (< 1 (count step))))
+
 (defn- step-phase [step]
   (cond (symbol? step)               :fn
         (or (fn? step) (var? step))  :fn
-        (and (map? step) (contains? step :tx)) :tx
+        (tx? step)                   :tx
         (schema/schema-delta? step)  :schema
+        (ambiguous-step? step)       :ambiguous
         :else                        :unknown))
 
 (defn- step-summary
@@ -68,12 +83,11 @@
     (symbol? step) {:phase :fn :fn step}
     (var? step)    {:phase :fn :fn (symbol (str (:ns (meta step))) (str (:name (meta step))))}
     (fn? step)     {:phase :fn :fn :anonymous}
-    (and (map? step) (contains? step :tx)) {:phase :tx :tx-count (count (:tx step))}
-    (schema/schema-delta? step)
-    (cond
-      (contains? step :schema/create) {:phase :schema :op :create :attrs (vec (keys (:schema/create step)))}
-      (contains? step :schema/alter)  {:phase :schema :op :alter  :attrs (vec (keys (:schema/alter step)))}
-      (contains? step :schema/remove) {:phase :schema :op :remove :attrs (vec (:schema/remove step))})
+    (tx? step)     {:phase :tx :tx-count (count (:tx step))}
+    (schema/create? step) {:phase :schema :op :create :attrs (vec (keys (:schema/create step)))}
+    (schema/alter?  step) {:phase :schema :op :alter  :attrs (vec (keys (:schema/alter step)))}
+    (schema/remove? step) {:phase :schema :op :remove :attrs (vec (:schema/remove step))}
+    (ambiguous-step? step) {:phase :ambiguous :keys (vec (keys step))}
     :else {:phase :unknown}))
 
 (defn- ms-since [^long start-ns]
@@ -92,11 +106,17 @@
     (or (var? step) (fn? step))
     (step conn)
 
-    (and (map? step) (contains? step :tx))
+    (tx? step)
     (d/transact! conn (:tx step))
 
     (schema/schema-delta? step)
     (schema/apply-delta! conn step)
+
+    (ambiguous-step? step)
+    (throw (ex-info (str "A step must name exactly one of :tx / :schema/create / "
+                         ":schema/alter / :schema/remove; this step names several. "
+                         "Split them into separate steps.")
+                    {:step step :syncopate/ambiguous-step true}))
 
     (schema/legacy-schema-step? step)
     (throw (ex-info (str "The `:schema` step is obsolete — use `:schema/create` "
@@ -209,6 +229,14 @@
     (when (some schema/legacy-schema-step? (concat up-steps down-steps))
       (throw (ex-info (legacy-schema-guidance id up-steps)
                       {:syncopate/id id :syncopate/legacy-schema true})))
+    (when-let [amb (first (filter ambiguous-step? (concat up-steps down-steps)))]
+      (throw (ex-info
+              (format (str "Migration %s has a step that names more than one "
+                           "operation %s — a step must perform exactly one of :tx / "
+                           ":schema/create / :schema/alter / :schema/remove. Split "
+                           "them into separate steps.")
+                      id (vec (keys amb)))
+              {:syncopate/id id :step amb :syncopate/ambiguous-step true})))
     (let [down' (cond
                   (contains? spec :down) down
                   (not irreversible?)    (auto-down id up-steps))]
