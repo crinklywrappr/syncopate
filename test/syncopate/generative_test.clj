@@ -23,7 +23,7 @@
 (defn- schema-attrs [conn] (set (keys (d/schema conn))))
 
 (defn- up-attrs [spec]
-  (set (mapcat #(keys (:schema %)) (:up spec))))
+  (set (mapcat #(keys (:schema/create %)) (:up spec))))
 
 (defn- datom-count
   "Number of entities carrying attr `a` (0 if `a` isn't in the schema)."
@@ -133,7 +133,7 @@
       (fn [conn store]
         (let [id    (str "irr" n)
               m     (syncopate/->migration
-                     {:id id :irreversible? true :up [{:schema {a {:db/valueType vt}}}]})]
+                     {:id id :irreversible? true :up [{:schema/create {a {:db/valueType vt}}}]})]
           (syncopate/migrate! store m)
           (and (is (contains? (schema-attrs conn) a) "attr added")
                (is (= [id] (rp/applied-migration-ids store)) "recorded")
@@ -179,14 +179,14 @@
     (with-temp-db
       (fn [conn store]
         (let [setup (syncopate/->migration
-                     {:id "0001" :up {:schema {:user/name {:db/valueType :db.type/string}}}})
+                     {:id "0001" :up {:schema/create {:user/name {:db/valueType :db.type/string}}}})
               split (syncopate/->migration
                      {:id   "0002"
-                      :up   [{:schema {:user/given-name  {:db/valueType :db.type/string}
-                                       :user/family-name {:db/valueType :db.type/string}}}
+                      :up   [{:schema/create {:user/given-name  {:db/valueType :db.type/string}
+                                              :user/family-name {:db/valueType :db.type/string}}}
                              'syncopate.example/split-user-names
                              {:schema/remove [:user/name]}]
-                      :down [{:schema {:user/name {:db/valueType :db.type/string}}}
+                      :down [{:schema/create {:user/name {:db/valueType :db.type/string}}}
                              'syncopate.example/join-user-names
                              {:schema/remove [:user/given-name :user/family-name]}]})]
           (syncopate/migrate! store setup)
@@ -213,7 +213,7 @@
         (doseq [[i id] (map-indexed vector ids)]
           (syncopate/migrate! store
             (syncopate/->migration
-             {:id id :up [{:schema {(keyword "gen" (str "o" i)) {:db/valueType :db.type/long}}}]})))
+             {:id id :up [{:schema/create {(keyword "gen" (str "o" i)) {:db/valueType :db.type/long}}}]})))
         (is (= ids (rp/applied-migration-ids store))
             "applied ids reflect application order, not id-sorted order")))))
 
@@ -225,7 +225,7 @@
         (let [a     :gen/sval
               m     (syncopate/->migration
                      {:id   "0001"
-                      :up   [{:schema {a {:db/valueType :db.type/string}}}
+                      :up   [{:schema/create {a {:db/valueType :db.type/string}}}
                              {:tx (mapv (fn [v] {a v}) vals)}]
                       :down [{:schema/remove [a]}]})]
           (syncopate/migrate! store m)
@@ -243,7 +243,7 @@
         (let [base   (schema-attrs conn)
               schema (into {} (map (fn [a] [a {:db/valueType :db.type/long}]) attrs))
               m      (syncopate/->migration
-                      {:id "0001" :up [{:schema schema}] :down [{:schema/remove (vec attrs)}]})]
+                      {:id "0001" :up [{:schema/create schema}] :down [{:schema/remove (vec attrs)}]})]
           (syncopate/migrate! store m)
           (and
            (is (every? (schema-attrs conn) attrs) "attrs added")

@@ -141,7 +141,7 @@
   ;; change NOR the applied-id behind — both roll back together.
   (let [boom (syncopate/->migration
               {:id "boomer"
-               :up [{:schema {:widget/name {:db/valueType :db.type/string}}}
+               :up [{:schema/create {:widget/name {:db/valueType :db.type/string}}}
                     (fn [_] (throw (ex-info "boom" {})))]
                :irreversible? true})]
     (is (thrown? clojure.lang.ExceptionInfo (syncopate/migrate! *store* boom)))
@@ -178,7 +178,7 @@
 (deftest logging-failure-at-error
   (let [boom (syncopate/->migration
               {:id "boomer"
-               :up [{:schema {:widget/name {:db/valueType :db.type/string}}}
+               :up [{:schema/create {:widget/name {:db/valueType :db.type/string}}}
                     (fn [_] (throw (ex-info "boom" {})))]
                :irreversible? true})
         logs (capture-logs #(try (syncopate/migrate! *store* boom)
@@ -206,21 +206,27 @@
       (is (= {:phase :fn :fn 'clojure.core/identity}    (summary #'clojure.core/identity)))
       (is (= {:phase :fn :fn :anonymous}                (summary (fn [_]))))
       (is (= {:phase :tx :tx-count 2}                   (summary {:tx [{} {}]})))
-      (is (= {:phase :schema :add [:a/b] :remove [:c/d]}
-             (summary {:schema {:a/b {}} :schema/remove [:c/d]})))
+      (is (= {:phase :schema :op :create :attrs [:a/b]}
+             (summary {:schema/create {:a/b {}}})))
+      (is (= {:phase :schema :op :alter :attrs [:a/b]}
+             (summary {:schema/alter {:a/b {}}})))
+      (is (= {:phase :schema :op :remove :attrs [:c/d]}
+             (summary {:schema/remove [:c/d]})))
       (is (= {:phase :unknown}                          (summary 42))))
     (testing "step-phase"
       (is (= :fn      (phase 'my/fn)))
       (is (= :fn      (phase #'clojure.core/identity)))
       (is (= :fn      (phase (fn [_]))))
       (is (= :tx      (phase {:tx []})))
-      (is (= :schema  (phase {:schema {}})))
+      (is (= :schema  (phase {:schema/create {}})))
+      (is (= :schema  (phase {:schema/alter {:a/b {}}})))
+      (is (= :schema  (phase {:schema/remove [:c/d]})))
       (is (= :unknown (phase 42))))))
 
 (deftest run-step-tx-and-unrecognised
   (let [run-step! #'syncopate/run-step!]
     (testing ":tx step transacts"
-      (run-step! *conn* {:schema {:thing/name {:db/valueType :db.type/string}}})
+      (run-step! *conn* {:schema/create {:thing/name {:db/valueType :db.type/string}}})
       (run-step! *conn* {:tx [{:thing/name "hi"}]})
       (is (= ["hi"] (d/q '[:find [?n ...] :where [?e :thing/name ?n]] (d/db *conn*)))))
     (testing "unrecognised step throws"
@@ -243,7 +249,7 @@
 
 (deftest jar-loading
   (let [jar  (make-jar {"migrations/0001-a.edn"
-                        "{:up {:schema {:x/y {:db/valueType :db.type/string}}}}"
+                        "{:up {:schema/create {:x/y {:db/valueType :db.type/string}}}}"
                         "migrations/README.txt" "not a migration"})
         url  (URL. (str "jar:file:" (.getAbsolutePath jar) "!/migrations"))
         migs (#'syncopate/resource-migrations url "migrations")]
@@ -255,7 +261,7 @@
 (deftest non-transactional-migration
   (let [m (syncopate/->migration
            {:id "notx" :transaction? false
-            :up {:schema {:gadget/name {:db/valueType :db.type/string}}}})]
+            :up {:schema/create {:gadget/name {:db/valueType :db.type/string}}}})]
     (syncopate/migrate! *store* m)
     (is (contains? (app-schema-attrs) :gadget/name))
     (is (= ["notx"] (rp/applied-migration-ids *store*)))
@@ -274,13 +280,75 @@
 
 (deftest migration-missing-id
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"missing :id"
-                        (syncopate/->migration {:up {:schema {:a/b {}}}}))))
+                        (syncopate/->migration {:up {:schema/create {:a/b {}}}}))))
 
 (deftest applied-ids-follow-application-order
   ;; Apply out of id order ("b" then "a"); applied-migration-ids must reflect
   ;; APPLICATION order via the monotonic :seq, not the wall-clock/id tie-break.
   (syncopate/migrate! *store*
-    (syncopate/->migration {:id "b" :up [{:schema {:z/b {:db/valueType :db.type/long}}}]}))
+    (syncopate/->migration {:id "b" :up [{:schema/create {:z/b {:db/valueType :db.type/long}}}]}))
   (syncopate/migrate! *store*
-    (syncopate/->migration {:id "a" :up [{:schema {:z/a {:db/valueType :db.type/long}}}]}))
+    (syncopate/->migration {:id "a" :up [{:schema/create {:z/a {:db/valueType :db.type/long}}}]}))
   (is (= ["b" "a"] (rp/applied-migration-ids *store*))))
+
+;; ---------------------------------------------------------------------------
+;; Schema-op taxonomy: :schema/create / :schema/alter / :schema/remove
+;; ---------------------------------------------------------------------------
+
+(deftest legacy-schema-rejected
+  (testing "bare :schema is obsolete — ->migration errors, forking create vs alter"
+    (let [spec {:id "old" :up {:schema {:user/id {:db/valueType :db.type/long}}}}]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":schema/create"
+                            (syncopate/->migration spec)))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":schema/alter"
+                            (syncopate/->migration spec)))))
+  (testing "a purely-additive legacy :up gets the naive :down to copy-paste"
+    (try (syncopate/->migration {:id "old" :up [{:schema {:user/id {:db/valueType :db.type/long}}}]})
+         (is false "should have thrown")
+         (catch clojure.lang.ExceptionInfo e
+           (is (:syncopate/legacy-schema (ex-data e)))
+           (is (re-find #":schema/remove \[:user/id\]" (.getMessage e))))))
+  (testing "run-step! backstops a raw :schema step too"
+    (let [run-step! #'syncopate/run-step!]
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"obsolete"
+                            (run-step! *conn* {:schema {:x/y {}}}))))))
+
+(deftest alter-requires-explicit-down
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not purely :schema/create"
+                        (syncopate/->migration
+                         {:id "alt" :up {:schema/alter {:person/email {:db/index true}}}}))
+      ":schema/alter is not auto-invertible — a missing :down must error at build"))
+
+(deftest alter-patches-existing-definition
+  ;; datalevin 1.1.0 patches (merges) an existing attr's definition rather than
+  ;; replacing it — the property that makes :schema/alter first-class (and made
+  ;; the old ambiguous :schema step's auto-drop rollback a data-loss footgun).
+  (let [run-step! #'syncopate/run-step!]
+    (run-step! *conn* {:schema/create {:person/email {:db/valueType   :db.type/string
+                                                      :db/cardinality :db.cardinality/many}}})
+    (run-step! *conn* {:schema/alter {:person/email {:db/index true}}})
+    (let [d (get (d/schema *conn*) :person/email)]
+      (is (= :db.cardinality/many (:db/cardinality d)) "existing property preserved (patch, not replace)")
+      (is (true? (:db/index d)) "new property applied by alter"))))
+
+(deftest alter-round-trip-preserves-data
+  ;; The fix: a :schema/alter migration with a correct explicit :down (the inverse
+  ;; change) round-trips without dropping the attribute or its data — unlike the
+  ;; old auto-derived drop-based rollback.
+  (let [setup (syncopate/->migration
+               {:id "0001" :up {:schema/create {:person/email {:db/valueType :db.type/string}}}})
+        index (syncopate/->migration
+               {:id   "0002"
+                :up   {:schema/alter {:person/email {:db/index true}}}
+                :down {:schema/alter {:person/email {:db/index false}}}})]
+    (syncopate/migrate! *store* setup)
+    (d/transact! *conn* [{:person/email "a@x.com"} {:person/email "b@x.com"}])
+    (syncopate/migrate! *store* index)
+    (is (true? (:db/index (get (d/schema *conn*) :person/email))) "index added by alter")
+    (syncopate/rollback! *store* index)
+    (is (contains? (app-schema-attrs) :person/email)
+        "attribute still exists after alter rollback (not dropped)")
+    (is (not (:db/index (get (d/schema *conn*) :person/email))) "index turned back off")
+    (is (= #{"a@x.com" "b@x.com"}
+           (set (d/q '[:find [?v ...] :where [?e :person/email ?v]] (d/db *conn*))))
+        "data preserved through the alter round-trip")))
