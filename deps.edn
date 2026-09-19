@@ -1,6 +1,6 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.12.5"}
-        datalevin/datalevin {:mvn/version "1.0.0"}
+        datalevin/datalevin {:mvn/version "1.1.0"}
         dev.weavejester/ragtime.core {:mvn/version "0.12.1"}
         com.taoensso/trove {:mvn/version "1.1.0"}}
  :aliases

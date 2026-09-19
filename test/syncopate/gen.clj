@@ -71,17 +71,23 @@
                                      {:max-elements 12}))))
 
 (def additive-delta
-  "A purely-additive schema delta: {:schema {attr def ...}}. Uses the broad all-16
+  "A `:schema/create` step: {:schema/create {attr def ...}}. Uses the broad all-16
   type space — pure-only (nothing stateful consumes `additive-delta`)."
-  (gen/fmap (fn [m] {:schema m}) broad-attr->def))
+  (gen/fmap (fn [m] {:schema/create m}) broad-attr->def))
+
+(def alter-delta
+  "A `:schema/alter` step: {:schema/alter {attr def ...}}. A valid schema
+  operation that is NOT auto-invertible (pure-only)."
+  (gen/fmap (fn [m] {:schema/alter m}) broad-attr->def))
 
 (def removal-delta
   "A removal-only delta: {:schema/remove [attr ...]}."
   (gen/fmap (fn [as] {:schema/remove (vec as)})
             (gen/not-empty (gen/set attr {:max-elements 12}))))
 
-(def mixed-delta
-  "A delta with both :schema and :schema/remove."
+(def ambiguous-delta
+  "A malformed step naming more than one schema operation in one map (no longer
+  allowed — each step carries exactly one op)."
   (gen/fmap (fn [[a r]] (merge a r)) (gen/tuple additive-delta removal-delta)))
 
 (def tx-step
@@ -108,7 +114,7 @@
   (gen/one-of [gen/small-integer gen/string-alphanumeric gen/keyword]))
 
 (def ^:private malformed-schema-val
-  "A `:schema` value of the wrong shape."
+  "A `:schema/create` or `:schema/alter` value of the wrong shape."
   (gen/one-of [not-a-map
                (gen/fmap #(into {} (for [[k v] %] [k (str v)])) attr->def)   ; attr -> non-map
                (gen/fmap #(into {} (for [[_ v] %] [(str (gensym "a")) v])) attr->def)])) ; non-kw key
@@ -120,14 +126,16 @@
                (gen/vector gen/string-alphanumeric 1 4)]))
 
 (def malformed-delta
-  "Maps that name :schema / :schema/remove but with wrong-shaped values."
-  (gen/one-of [(gen/fmap (fn [v] {:schema v}) malformed-schema-val)
+  "Maps that name a single schema op with a wrong-shaped value. (A map naming more
+  than one op is `ambiguous-delta`, a distinct error category.)"
+  (gen/one-of [(gen/fmap (fn [v] {:schema/create v}) malformed-schema-val)
+               (gen/fmap (fn [v] {:schema/alter v})  malformed-schema-val)
                (gen/fmap (fn [v] {:schema/remove v}) malformed-remove-val)]))
 
 (def step
   "Any migration step shape — drives the step-phase / step-summary specs."
   (gen/one-of [fn-symbol core-var anon-fn tx-step
-               additive-delta removal-delta mixed-delta non-delta malformed-delta]))
+               additive-delta alter-delta removal-delta non-delta malformed-delta]))
 
 (def migration-spec
   "A valid input to `->migration`: additive :up (so :down auto-derives), with an
@@ -185,10 +193,10 @@
           id   (format "r%03d" i)
           spec (if (= kind :data)
                  {:id   id
-                  :up   [{:schema {a {:db/valueType vt}}}
+                  :up   [{:schema/create {a {:db/valueType vt}}}
                          {:tx (mapv (fn [v] {a v}) vals)}]
                   :down [{:schema/remove [a]}]}
-                 {:id id :up [{:schema {a {:db/valueType vt}}}]})]
+                 {:id id :up [{:schema/create {a {:db/valueType vt}}}]})]
       {:spec  (cond-> spec (not txn?) (assoc :transaction? false)) ; exercise the non-atomic path
        :attr  a
        :count (if (= kind :data) (count vals) 0)})))
@@ -223,11 +231,11 @@
                     (cond
                       (and (= op :add) (not (live a)))
                       {:live (conj live a) :i (inc i)
-                       :migs (conj migs {:id id :up [{:schema {a def*}}]})}
+                       :migs (conj migs {:id id :up [{:schema/create {a def*}}]})}
                       (and (= op :remove) (live a))
                       {:live (disj live a) :i (inc i)
                        :migs (conj migs {:id id :up [{:schema/remove [a]}]
-                                         :down [{:schema {a def*}}]})}
+                                         :down [{:schema/create {a def*}}]})}
                       :else {:live live :i i :migs migs})))
           {:keys [live migs]} (reduce step {:live #{} :migs [] :i 0} raw)]
       {:migrations migs :final-live live :attrs (set attrs)})))
@@ -254,7 +262,7 @@
           migs   (map-indexed
                   (fn [i id]
                     {:id id
-                     :up [{:schema {(keyword "gen" (str "w" i)) {:db/valueType :db.type/long}}}]})
+                     :up [{:schema/create {(keyword "gen" (str "w" i)) {:db/valueType :db.type/long}}}]})
                   sorted)]
       {:migrations (vec migs) :sorted-ids sorted})))
 
@@ -264,12 +272,12 @@
 
 (defn- group->migration [i group]
   {:id (format "m%03d" i)
-   :up [{:schema (into {} group)}]})
+   :up [{:schema/create (into {} group)}]})
 
 (def plan
   "A migration plan: a vector of additive migration specs with pairwise-distinct
   attrs and zero-padded sequential ids, plus the full attr->def map for assertions.
-  Each migration carries one multi-attr additive `:schema` step."
+  Each migration carries one multi-attr `:schema/create` step."
   (gen/let [a->d attr->def
             k    (gen/choose 1 (count a->d))]
     (let [group-sz (max 1 (long (Math/ceil (/ (count a->d) (double k)))))

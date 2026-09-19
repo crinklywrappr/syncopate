@@ -17,8 +17,9 @@
      :irreversible? false}            ; optional
 
   A *step* is one of:
-    - {:schema {attr def ...}}        add/update attrs   (invertible)
-    - {:schema/remove [attr ...]}     retract + drop attrs
+    - {:schema/create {attr def ...}} add NEW attributes     (auto-invertible)
+    - {:schema/alter  {attr def ...}} modify existing attrs  (needs :down)
+    - {:schema/remove [attr ...]}     retract + drop attrs   (needs :down)
     - {:tx [tx-data ...]}             raw `transact!` data
     - a fully-qualified symbol        resolved to (fn [conn] ...) and called
     - (in .clj files) an actual fn    called as (fn [conn] ...)
@@ -26,8 +27,11 @@
   Sugar:
     - `:up`/`:down` may be a single step instead of a vector.
     - Omit `:down` and it is derived automatically iff every `:up` step is a
-      purely additive schema delta. Otherwise supply `:down`, or set
-      `:irreversible? true` to opt out of rollback with a clear error."
+      `:schema/create` (adds → removes). Otherwise supply `:down`, or set
+      `:irreversible? true` to opt out of rollback with a clear error.
+
+  The obsolete bare `:schema` step (ambiguous between create and alter) is
+  rejected with an actionable error — see `->migration`."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -50,11 +54,26 @@
         (vector? x) x
         :else       [x]))
 
+(defn- tx?
+  "True if `step` is a raw-transaction step: a `:tx` map naming nothing else."
+  [step]
+  (and (map? step) (== 1 (count step)) (contains? step :tx)))
+
+(defn- ambiguous-step?
+  "True if map `step` has more than one key. A well-formed step is a
+  single-operation map (see `tx?` and the `syncopate.schema` predicates), so a map
+  with several keys — whether it combines operations or carries a stray key — is
+  rejected rather than silently reduced to one. (An empty map names nothing and is
+  not ambiguous; it falls through to :unknown.)"
+  [step]
+  (and (map? step) (> (count step) 1)))
+
 (defn- step-phase [step]
   (cond (symbol? step)               :fn
         (or (fn? step) (var? step))  :fn
-        (and (map? step) (contains? step :tx)) :tx
+        (tx? step)                   :tx
         (schema/schema-delta? step)  :schema
+        (ambiguous-step? step)       :ambiguous
         :else                        :unknown))
 
 (defn- step-summary
@@ -64,10 +83,11 @@
     (symbol? step) {:phase :fn :fn step}
     (var? step)    {:phase :fn :fn (symbol (str (:ns (meta step))) (str (:name (meta step))))}
     (fn? step)     {:phase :fn :fn :anonymous}
-    (and (map? step) (contains? step :tx)) {:phase :tx :tx-count (count (:tx step))}
-    (schema/schema-delta? step) {:phase  :schema
-                                 :add    (vec (keys (:schema step)))
-                                 :remove (vec (:schema/remove step))}
+    (tx? step)     {:phase :tx :tx-count (count (:tx step))}
+    (schema/create? step) {:phase :schema :op :create :attrs (vec (keys (:schema/create step)))}
+    (schema/alter?  step) {:phase :schema :op :alter  :attrs (vec (keys (:schema/alter step)))}
+    (schema/remove? step) {:phase :schema :op :remove :attrs (vec (:schema/remove step))}
+    (ambiguous-step? step) {:phase :ambiguous :keys (vec (keys step))}
     :else {:phase :unknown}))
 
 (defn- ms-since [^long start-ns]
@@ -86,11 +106,23 @@
     (or (var? step) (fn? step))
     (step conn)
 
-    (and (map? step) (contains? step :tx))
+    (tx? step)
     (d/transact! conn (:tx step))
 
     (schema/schema-delta? step)
     (schema/apply-delta! conn step)
+
+    (ambiguous-step? step)
+    (throw (ex-info (str "A step must name exactly one of :tx / :schema/create / "
+                         ":schema/alter / :schema/remove; this step names several. "
+                         "Split them into separate steps.")
+                    {:step step :syncopate/ambiguous-step true}))
+
+    (schema/legacy-schema-step? step)
+    (throw (ex-info (str "The `:schema` step is obsolete — use `:schema/create` "
+                         "for new attributes or `:schema/alter` to modify existing "
+                         "ones. See doc/schema-migrations.md.")
+                    {:step step :syncopate/legacy-schema true}))
 
     :else
     (throw (ex-info (str "Unrecognised migration step: " (pr-str step))
@@ -147,14 +179,16 @@
     (run-direction! (:conn store) id :down transaction? (as-steps down))))
 
 (defn- auto-down
-  "Derive a migration's :down by inverting a purely-additive :up (adds → removes),
-  logging the derivation. Throws if the :up isn't purely additive, so a missing
-  :down can't silently leave a migration unreversible."
+  "Derive a migration's :down by inverting a :up made purely of `:schema/create`
+  steps (creates → removes), logging the derivation. Throws if the :up isn't
+  purely `:schema/create`, so a missing :down can't silently leave a migration
+  unreversible."
   [id up-steps]
   (when-not (and (seq up-steps) (every? schema/additive? up-steps))
     (throw (ex-info (format (str "Migration %s has no :down and its :up is not "
-                                 "purely additive; supply :down or set "
-                                 ":irreversible? true")
+                                 "purely :schema/create; :schema/alter, "
+                                 ":schema/remove and data/fn steps need an "
+                                 "explicit :down (or set :irreversible? true)")
                             id)
                     {:syncopate/id id})))
   (trove/log! {:level :debug :id :syncopate/auto-down
@@ -162,21 +196,56 @@
                :data {:migration/id (str id)}})
   (mapv schema/invert (reverse up-steps)))
 
+(defn- legacy-schema-guidance
+  "Actionable upgrade error for a migration still using the obsolete bare
+  `:schema` step. Forks the author between `:schema/create` and `:schema/alter`,
+  and — when the :up is purely legacy-`:schema` — includes the naive auto-`:down`
+  to copy-paste, which also makes the destructive rollback obvious."
+  [id up-steps]
+  (let [legacy-up  (filter schema/legacy-schema-step? up-steps)
+        naive-down (mapv (fn [s] {:schema/remove (vec (keys (:schema s)))})
+                         (reverse legacy-up))
+        pr-down    (binding [*print-namespace-maps* false] (pr-str naive-down))]
+    (str "Migration " id " uses the obsolete `:schema` step, which was ambiguous "
+         "(it could add new attributes OR modify existing ones). Replace it:\n"
+         "  - new attributes  -> :schema/create  (rollback auto-derived)\n"
+         "  - modify existing -> :schema/alter   (supply an explicit :down)\n"
+         (when (and (seq legacy-up) (every? schema/legacy-schema-step? up-steps))
+           (str "\nIf these are all NEW attributes, switch to :schema/create; its "
+                "auto-derived rollback would be:\n"
+                "  :down " pr-down "\n"
+                "If any already exist, use :schema/alter with an explicit :down "
+                "instead — the rollback above would DROP the attribute(s) and "
+                "delete their data.\n"))
+         "\nSee doc/schema-migrations.md.")))
+
 (defn ->migration
   "Build a `SyncopateMigration` from a spec map (see the namespace docstring)."
   [{:keys [id up down transaction? irreversible?] :as spec}]
   (when-not id
     (throw (ex-info "Migration spec is missing :id" {:spec spec})))
-  (let [up-steps (as-steps up)
-        down'    (cond
-                   (contains? spec :down) down
-                   (not irreversible?)    (auto-down id up-steps))]
-    (map->SyncopateMigration
-     {:id            (str id)
-      :up            up
-      :down          down'
-      :transaction?  (if (contains? spec :transaction?) transaction? true)
-      :irreversible? (boolean irreversible?)})))
+  (let [up-steps   (as-steps up)
+        down-steps (as-steps down)]
+    (when (some schema/legacy-schema-step? (concat up-steps down-steps))
+      (throw (ex-info (legacy-schema-guidance id up-steps)
+                      {:syncopate/id id :syncopate/legacy-schema true})))
+    (when-let [amb (first (filter ambiguous-step? (concat up-steps down-steps)))]
+      (throw (ex-info
+              (format (str "Migration %s has a step that names more than one "
+                           "operation %s — a step must perform exactly one of :tx / "
+                           ":schema/create / :schema/alter / :schema/remove. Split "
+                           "them into separate steps.")
+                      id (vec (keys amb)))
+              {:syncopate/id id :step amb :syncopate/ambiguous-step true})))
+    (let [down' (cond
+                  (contains? spec :down) down
+                  (not irreversible?)    (auto-down id up-steps))]
+      (map->SyncopateMigration
+       {:id            (str id)
+        :up            up
+        :down          down'
+        :transaction?  (if (contains? spec :transaction?) transaction? true)
+        :irreversible? (boolean irreversible?)}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Loaders

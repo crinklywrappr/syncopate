@@ -2,6 +2,26 @@
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](http://keepachangelog.com/).
 
 ## [Unreleased]
+### Changed
+- **BREAKING: the `:schema` step is replaced by `:schema/create` and
+  `:schema/alter`.** The old `:schema` step was ambiguous — it could add new
+  attributes or modify existing ones — and Syncopate auto-derived a `:down` that
+  *dropped* the attributes and retracted their data, silently destroying data
+  when the step had actually modified an existing attribute. Datalevin 1.1.0 makes
+  `update-schema` patch (merge) existing attribute definitions, turning attribute
+  updates into a first-class operation and making that footgun reachable in normal
+  use. Migrations now declare intent: `:schema/create` (new attributes,
+  auto-invertible) vs `:schema/alter` (modify existing attributes, requires an
+  explicit `:down`); `:schema/remove` is unchanged. Bare `:schema` is rejected at
+  `->migration` with an actionable error that forks create-vs-alter and, for a
+  purely-additive `:up`, prints the `:down` to copy-paste. Each step performs
+  exactly one operation (a `:tx` or a single schema op); a map naming more than
+  one is rejected with a clear error rather than silently keeping one and dropping
+  the rest. See `doc/schema-migrations.md`.
+- **Datalevin bumped to 1.1.0** (from 1.0.0).
+- `store`'s embedded KV handle is now obtained via Datalevin's supported
+  `datalog-kv` rather than reaching into `datalevin.storage.Store` internals.
+
 ### Added
 - **Client/server (`dtlv://`) support.** `store` now works over a networked
   Datalevin connection as well as an embedded one, keeping the core promise:

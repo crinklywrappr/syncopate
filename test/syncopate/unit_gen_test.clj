@@ -9,9 +9,10 @@
             [syncopate.schema :as schema]))
 
 ;; private fns under test
-(def ^:private as-steps     #'core/as-steps)
-(def ^:private step-phase   #'core/step-phase)
-(def ^:private step-summary #'core/step-summary)
+(def ^:private as-steps        #'core/as-steps)
+(def ^:private step-phase      #'core/step-phase)
+(def ^:private step-summary    #'core/step-summary)
+(def ^:private ambiguous-step? #'core/ambiguous-step?)
 
 ;; ---------------------------------------------------------------------------
 ;; syncopate.schema/invert
@@ -20,7 +21,7 @@
 (defspec invert-removes-exactly-the-added-attrs 500
   (prop/for-all [d sgen/additive-delta]
     (= (set (:schema/remove (schema/invert d)))
-       (set (keys (:schema d))))))
+       (set (keys (:schema/create d))))))
 
 (defspec invert-yields-a-non-additive-delta 500
   (prop/for-all [d sgen/additive-delta]
@@ -36,8 +37,8 @@
   (prop/for-all [d sgen/additive-delta]
     (and (schema/additive? d) (schema/schema-delta? d))))
 
-(defspec removal-and-mixed-are-schema-deltas-not-additive 500
-  (prop/for-all [d (gen/one-of [sgen/removal-delta sgen/mixed-delta])]
+(defspec removal-and-alter-are-schema-deltas-not-additive 500
+  (prop/for-all [d (gen/one-of [sgen/removal-delta sgen/alter-delta])]
     (and (schema/schema-delta? d) (not (schema/additive? d)))))
 
 (defspec non-delta-is-not-a-schema-delta 500
@@ -48,10 +49,23 @@
   (prop/for-all [d sgen/malformed-delta]
     (and (not (schema/schema-delta? d)) (not (schema/additive? d)))))
 
-(defspec additive-iff-schema-delta-without-removal 1000
+(defspec ambiguous-steps-are-not-deltas 500
+  (prop/for-all [d sgen/ambiguous-delta]
+    (and (ambiguous-step? d)
+         (not (schema/schema-delta? d))
+         (not (schema/additive? d)))))
+
+(defspec ambiguous-steps-throw-at-build 200
+  (prop/for-all [d  sgen/ambiguous-delta
+                 id (gen/fmap str gen/nat)]
+    (try (core/->migration {:id id :up d}) false
+         (catch clojure.lang.ExceptionInfo e
+           (boolean (:syncopate/ambiguous-step (ex-data e)))))))
+
+(defspec additive-iff-schema-delta-that-creates 1000
   (prop/for-all [s sgen/step]
     (= (schema/additive? s)
-       (and (schema/schema-delta? s) (not (contains? s :schema/remove))))))
+       (and (schema/schema-delta? s) (contains? s :schema/create)))))
 
 ;; ---------------------------------------------------------------------------
 ;; core/as-steps
@@ -85,7 +99,7 @@
     (= :tx (step-phase s))))
 
 (defspec step-phase-classifies-schema 500
-  (prop/for-all [s (gen/one-of [sgen/additive-delta sgen/removal-delta sgen/mixed-delta])]
+  (prop/for-all [s (gen/one-of [sgen/additive-delta sgen/alter-delta sgen/removal-delta])]
     (= :schema (step-phase s))))
 
 (defspec step-phase-classifies-unknown 500
@@ -119,9 +133,19 @@
   (prop/for-all [s sgen/tx-step]
     (= {:phase :tx :tx-count (count (:tx s))} (step-summary s))))
 
-(defspec step-summary-additive 500
+(defspec step-summary-create 500
   (prop/for-all [d sgen/additive-delta]
-    (= {:phase :schema :add (vec (keys (:schema d))) :remove []}
+    (= {:phase :schema :op :create :attrs (vec (keys (:schema/create d)))}
+       (step-summary d))))
+
+(defspec step-summary-alter 500
+  (prop/for-all [d sgen/alter-delta]
+    (= {:phase :schema :op :alter :attrs (vec (keys (:schema/alter d)))}
+       (step-summary d))))
+
+(defspec step-summary-remove 500
+  (prop/for-all [d sgen/removal-delta]
+    (= {:phase :schema :op :remove :attrs (vec (:schema/remove d))}
        (step-summary d))))
 
 ;; ---------------------------------------------------------------------------

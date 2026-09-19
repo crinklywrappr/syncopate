@@ -1,5 +1,5 @@
-;; Purely additive schema migration. No :down needed — Syncopate derives it
-;; automatically (adding :user/id + :user/name inverts to removing them).
-{:up {:schema {:user/id   {:db/valueType :db.type/long
-                           :db/unique    :db.unique/identity}
-               :user/name {:db/valueType :db.type/string}}}}
+;; Purely additive schema migration (:schema/create). No :down needed — Syncopate
+;; derives it automatically (creating :user/id + :user/name inverts to removing).
+{:up {:schema/create {:user/id   {:db/valueType :db.type/long
+                                  :db/unique    :db.unique/identity}
+                      :user/name {:db/valueType :db.type/string}}}}
