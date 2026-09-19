@@ -20,7 +20,6 @@
             [ragtime.protocols :as rp]
             [taoensso.trove :as trove])
   (:import [java.util Date]
-           [datalevin.storage Store]
            [datalevin.remote DatalogStore]))
 
 (def default-dbi-name "__syncopate_migrations")
@@ -31,11 +30,12 @@
   (instance? DatalogStore (:store @conn)))
 
 (defn conn->lmdb
-  "The KV/LMDB handle backing an *embedded* Datalog connection. Works for a
-  transaction-bound connection too, so the atomic helpers in `syncopate.core` can
-  write the applied-id inside the migration's own `with-transaction`."
+  "The KV/LMDB handle backing an *embedded* Datalog connection, via datalevin's
+  supported `datalog-kv` (rather than reaching into the storage internals). Works
+  for a transaction-bound connection too, so the atomic helpers in `syncopate.core`
+  can write the applied-id inside the migration's own `with-transaction`."
   [conn]
-  (.lmdb ^Store (:store @conn)))
+  (d/datalog-kv conn))
 
 (defn- open-kv-handle
   "The KV `ILMDB` handle for a connection's applied-migration DBI. Embedded → the
