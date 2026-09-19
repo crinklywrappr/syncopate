@@ -215,6 +215,13 @@ Embedded (a temporary local Datalevin database):
 clojure -T:build test
 ```
 
+Run the embedded suite against **every supported Datalevin version** at once (the
+`:ci` matrix in `deps.edn` — the same versions CI runs):
+
+```
+clojure -T:build test-all
+```
+
 Client/server — the same suite run as a **pure client against a real, separate
 datalevin server**. Start one (in another terminal), then run the remote suite:
 
@@ -258,11 +265,13 @@ it's tagged `^:embedded` and skipped in the remote run.
   environment. Embedded stores reach that handle via Datalevin's supported
   `datalog-kv`; client/server stores open a KV client to the same database
   (the remote store's `:uri` + `open-kv`).
-- **Supported Datalevin range: see `deps.edn`.** The dependency there is pinned to
-  the *floor* (the lowest supported version), not the newest — a plain
-  `:mvn/version` is a soft/minimum constraint. CI runs the embedded suite across all
-  supported versions and the client/server suite at the floor and newest — the
-  `:dl-*` aliases in `deps.edn` list the versions covered.
+- **Supported Datalevin range: see `deps.edn`.** The `:ci` alias's
+  `:datalevin/versions` vector is the source of truth for the tested range. The
+  `:deps` dependency is pinned to the *floor* (the lowest supported version), not
+  the newest — a plain `:mvn/version` is a soft/minimum constraint. CI reads that
+  vector to run the embedded suite across every supported version and the
+  client/server suite at the floor and newest; `clojure -T:build test-all` runs the
+  whole range locally.
 - **Client/server** (`dtlv://`) is supported: the store opens a KV client to the
   same server database (sharing the datalog connection's env). Call
   `(syncopate/close! store)` when done to release that client (no-op for embedded).
