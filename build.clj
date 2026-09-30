@@ -235,7 +235,7 @@
     (println "\nWriting pom.xml...")
     (b/write-pom opts)
     (println "\nCopying source...")
-    (b/copy-dir {:src-dirs ["resources" "src"] :target-dir class-dir})
+    (b/copy-dir {:src-dirs ["src"] :target-dir class-dir})
     (println "\nBuilding JAR..." (:jar-file opts))
     (b/jar opts))
   opts)

@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](http://keepachangelog.com/).
 
 ## [Unreleased]
+### Fixed
+- The released jar no longer ships the example migrations. They were test
+  fixtures under `resources/migrations/`, so every consumer received them on the
+  classpath. An uberjar merged them next to the `migrations/` resource of a
+  consumer, so the consumer loaded and ran them. The files now live under
+  `test/resources/migrations/`, off the packaged path.
+
 ### Changed
 - **BREAKING: the `:schema` step is replaced by `:schema/create` and
   `:schema/alter`.** The old `:schema` step was ambiguous — it could add new
