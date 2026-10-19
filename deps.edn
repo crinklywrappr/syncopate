@@ -23,7 +23,7 @@
   ;; doesn't affect resolution. Embedded suite runs every version; the client/
   ;; server suite runs the min and max. Any one version is selectable via
   ;; `clojure -T:build test :dl "1.0.2"` (build.clj injects it as an :extra dep).
-  :ci {:datalevin/versions ["1.0.1" "1.0.2" "1.1.0"]}
+  :ci {:datalevin/versions ["1.0.1" "1.2.3" "1.2.4" "1.2.5"]}
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}
                  slipset/deps-deploy {:mvn/version "0.2.5"}
                  ;; matrix single-sourcing: structural deps.edn edits (bump-matrix)
