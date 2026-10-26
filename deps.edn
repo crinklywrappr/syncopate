@@ -4,11 +4,11 @@
  ;; lets consumers choose their own datalevin (a top-level dep wins in tools.deps;
  ;; nearest-wins in Maven/Leiningen) without us dragging anyone up. The `:ci`
  ;; alias below lists the versions we actually test up to the newest supported.
- ;; Floor = 1.0.1: `datalog-kv` exists (1.0.0+) AND `update-schema` PATCHES an
- ;; existing attr rather than replacing it (1.0.1+) — 1.0.0 clobbers, which would
- ;; silently corrupt `:schema/alter`, so it is not supported.
+ ;; The rationale for the current floor (why it sits where it does, and any
+ ;; releases skipped along the way) lives in the CHANGELOG, not here, so this
+ ;; comment stays correct as the floor and the matrix move.
  :deps {org.clojure/clojure {:mvn/version "1.12.5"}
-        datalevin/datalevin {:mvn/version "1.0.1"}
+        datalevin/datalevin {:mvn/version "1.2.2"}
         dev.weavejester/ragtime.core {:mvn/version "0.12.1"}
         com.taoensso/trove {:mvn/version "1.1.0"}}
  :aliases
@@ -22,8 +22,8 @@
   ;; new releases here via `bump-matrix`. Data-only alias (never activated), so it
   ;; doesn't affect resolution. Embedded suite runs every version; the client/
   ;; server suite runs the min and max. Any one version is selectable via
-  ;; `clojure -T:build test :dl "1.0.2"` (build.clj injects it as an :extra dep).
-  :ci {:datalevin/versions ["1.0.1" "1.0.2" "1.1.0"]}
+  ;; `clojure -T:build test :dl "<version>"` (build.clj injects it as an :extra dep).
+  :ci {:datalevin/versions ["1.2.2" "1.2.5" "1.2.6" "1.2.7"]}
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}
                  slipset/deps-deploy {:mvn/version "0.2.5"}
                  ;; matrix single-sourcing: structural deps.edn edits (bump-matrix)
