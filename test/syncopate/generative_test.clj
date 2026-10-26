@@ -12,8 +12,8 @@
 
 (defn- with-temp-db
   "Open a fresh Datalevin conn + store (embedded or remote per test mode), run
-  (f conn store), and always release both — close! frees the remote store's KV
-  client (a no-op embedded) so many iterations don't leak server sessions."
+  (f conn store), and always release both. close! is a no-op now (the KV handle
+  shares the connection), so closing the connection frees everything."
   [f]
   (let [conn  (test-db/fresh-conn)
         store (syncopate/store conn)]

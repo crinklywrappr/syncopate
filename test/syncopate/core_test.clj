@@ -17,8 +17,8 @@
 
 (defn with-temp-db [f]
   ;; A fresh, isolated db per test — embedded temp dir or a fresh remote db,
-  ;; per syncopate.test.mode (see syncopate.test-db). close! releases the
-  ;; remote store's KV client (a no-op embedded).
+  ;; per syncopate.test.mode (see syncopate.test-db). close! is a no-op now (the KV
+  ;; handle shares the connection), so closing the connection frees everything.
   (let [conn  (test-db/fresh-conn)
         store (syncopate/store conn)]
     (binding [*conn*  conn
@@ -133,12 +133,11 @@
       (is (= ["0001-add-users" "0002-split-names"] (rp/applied-migration-ids *store*)))
       (is (not (contains? (app-schema-attrs) :dept/name))))))
 
-(deftest ^:embedded atomic-rollback-on-failure
-  ;; Embedded-only: this is the atomic-fold guarantee that client/server
-  ;; deliberately trades for the documented two-transaction seam (the schema
-  ;; step commits before the failing fn, so it can't roll back remotely).
-  ;; The key guarantee: a failing transactional :up leaves NEITHER the schema
-  ;; change NOR the applied-id behind — both roll back together.
+(deftest atomic-rollback-on-failure
+  ;; The atomic-fold guarantee, in BOTH modes: a failing transactional :up leaves
+  ;; NEITHER the schema change NOR the applied-id behind — both roll back together.
+  ;; Client/server folds atomically too: `datalog-kv` on a transaction-bound
+  ;; connection joins the `with-transaction`.
   (let [boom (syncopate/->migration
               {:id "boomer"
                :up [{:schema/create {:widget/name {:db/valueType :db.type/string}}}
@@ -334,7 +333,7 @@
       ":schema/alter is not auto-invertible — a missing :down must error at build"))
 
 (deftest alter-patches-existing-definition
-  ;; datalevin 1.1.0 patches (merges) an existing attr's definition rather than
+  ;; datalevin patches (merges) an existing attr's definition rather than
   ;; replacing it — the property that makes :schema/alter first-class (and made
   ;; the old ambiguous :schema step's auto-drop rollback a data-loss footgun).
   (let [run-step! #'syncopate/run-step!]
@@ -366,3 +365,56 @@
     (is (= #{"a@x.com" "b@x.com"}
            (set (d/q '[:find [?v ...] :where [?e :person/email ?v]] (d/db *conn*))))
         "data preserved through the alter round-trip")))
+
+(deftest noindex-create-and-index-attr
+  ;; :db/noindex true (set at :schema/create) keeps an attr out of the AVE index:
+  ;; value-bound queries on it throw, but entity-bound reads still work. index-attr
+  ;; (a fn step) backfills existing values and clears :db/noindex — the only way to
+  ;; enable indexing once data exist. It runs inside the migration's transaction.
+  (let [create  (syncopate/->migration
+                 {:id "ni-001"
+                  :up [{:schema/create
+                        {:doc/id   {:db/valueType :db.type/long :db/unique :db.unique/identity}
+                         :doc/body {:db/valueType :db.type/string :db/noindex true}}}]})
+        reindex (syncopate/->migration
+                 {:id "ni-002"
+                  :up [(fn [conn] (d/index-attr conn :doc/body))]
+                  :irreversible? true})]
+    (syncopate/migrate! *store* create)
+    (d/transact! *conn* [{:doc/id 1 :doc/body "alpha"}
+                         {:doc/id 2 :doc/body "alpha"}
+                         {:doc/id 3 :doc/body "beta"}])
+    (testing ":db/noindex true excludes the attr from AVE"
+      (is (true? (:db/noindex (get (d/schema *conn*) :doc/body)))
+          "schema records :db/noindex true")
+      (is (thrown? Throwable
+                   (d/q '[:find ?e :where [?e :doc/body "alpha"]] (d/db *conn*)))
+          "a value-bound query on a noindex attr throws")
+      (is (= "alpha"
+             (d/q '[:find ?b . :in $ ?id :where [?e :doc/id ?id] [?e :doc/body ?b]]
+                  (d/db *conn*) 1))
+          "entity-bound reads still work"))
+    (testing "index-attr backfills, re-enables AVE, and clears the flag"
+      (syncopate/migrate! *store* reindex)
+      (is (nil? (:db/noindex (get (d/schema *conn*) :doc/body)))
+          "index-attr removed :db/noindex from the schema")
+      (is (= 2 (count (d/q '[:find ?e :where [?e :doc/body "alpha"]] (d/db *conn*))))
+          "value-bound query works after index-attr"))))
+
+(deftest noindex-alter-toggle-on-empty-attr
+  ;; :db/noindex can be toggled with :schema/alter only while the attr has no data
+  ;; (datalevin rejects the change once data exist — then use index-attr). A patch
+  ;; cannot delete a key, so the :down sets the flag back rather than removing it.
+  (let [setup  (syncopate/->migration
+                {:id "nt-000" :up [{:schema/create {:doc/note {:db/valueType :db.type/string}}}]})
+        toggle (syncopate/->migration
+                {:id   "nt-001"
+                 :up   [{:schema/alter {:doc/note {:db/noindex true}}}]
+                 :down [{:schema/alter {:doc/note {:db/noindex false}}}]})]
+    (syncopate/migrate! *store* setup)
+    (syncopate/migrate! *store* toggle)
+    (is (true? (:db/noindex (get (d/schema *conn*) :doc/note)))
+        "alter set :db/noindex true on the empty attr")
+    (syncopate/rollback! *store* toggle)
+    (is (not (:db/noindex (get (d/schema *conn*) :doc/note)))
+        ":down turned :db/noindex back off")))

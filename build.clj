@@ -52,14 +52,13 @@
   "Run the tests. Embedded by default; `:remote true` runs the suite against a
   client/server datalevin — a SEPARATE server must already be running (see
   README: `clojure -M:server`), or point elsewhere with `:server-uri
-  \"dtlv://…\"`. Remote runs skip the `^:embedded`-tagged atomicity test. Extra
-  kaocha args via `:args`. `:dl \"1.0.2\"` runs against a specific supported
+  \"dtlv://…\"`. Extra kaocha args via `:args`. `:dl \"<version>\"` runs against a specific supported
   datalevin version (injected as an :extra dep; default = the floor pinned in
   deps.edn — see the `:ci` alias there for the tested range). `ci` forwards these
   through, and `test-all` calls this once per version in the matrix."
   [{:keys [args remote server-uri dl] :or {args []} :as opts}]
   (run-kaocha
-   (cond-> args remote (into ["--skip-meta" ":embedded"]))
+   args
    (cond-> (test-java-opts)
      remote     (conj "-Dsyncopate.test.mode=remote")
      server-uri (conj (str "-Dsyncopate.test.server-uri=" server-uri)))

@@ -2,6 +2,27 @@
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](http://keepachangelog.com/).
 
 ## [Unreleased]
+### Changed
+- **BREAKING: the Datalevin floor is raised to 1.2.2** (was 1.0.1). A plain
+  `:mvn/version` is a soft or minimum constraint. Syncopate pins the floor, not the
+  newest, so consumers choose their own Datalevin without a forced upgrade. The
+  floor moved into the 1.2 line for two reasons. First, the whole tested range now
+  sits on one DLMDB storage format, because 1.2.0 introduced data format version 2.
+  Second, the range can use Datalevin's joinable remote `datalog-kv`. 1.2.0 and
+  1.2.1 are skipped. Both fail to load with `java.lang.ClassNotFoundException:
+  datalevin.NativeValue`, so 1.2.2 is the first usable 1.2 release. The `:ci`
+  alias's `:datalevin/versions` vector in `deps.edn` is the source of truth for the
+  tested range. The embedded suite runs 1.2.2, 1.2.5, 1.2.6, and 1.2.7. The
+  client/server suite runs the floor and the newest, 1.2.2 and 1.2.7, with a
+  matched server and client.
+- **Client/server migrations now fold atomically.** On a `dtlv://` connection the
+  applied-id write joins the migration's `with-transaction` via `datalog-kv`. A
+  transactional migration's body and its applied-id now commit or roll back
+  together, the same as embedded. Only `:transaction? false` migrations still use
+  the two-write seam. The store no longer opens a separate KV client, and `close!`
+  is a no-op kept for API symmetry.
+
+## [1.0.10] - 2026-09-29
 ### Fixed
 - The released jar no longer ships the example migrations. They were test
   fixtures under `resources/migrations/`, so every consumer received them on the
@@ -9,6 +30,7 @@ All notable changes to this project will be documented in this file. This change
   consumer, so the consumer loaded and ran them. The files now live under
   `test/resources/migrations/`, off the packaged path.
 
+## [1.0.9] - 2026-09-19
 ### Changed
 - **BREAKING: the `:schema` step is replaced by `:schema/create` and
   `:schema/alter`.** The old `:schema` step was ambiguous — it could add new
@@ -31,12 +53,22 @@ All notable changes to this project will be documented in this file. This change
   their own Datalevin (top-level dep wins in tools.deps; nearest-wins in
   Maven/Leiningen) without Syncopate forcing an upgrade. 1.0.1 is the floor
   because `update-schema`'s patch semantics (required by `:schema/alter`) land in
-  1.0.1; 1.0.0 replaces instead. A `:dl-*` alias matrix in `deps.edn` and CI run
-  the embedded suite against 1.0.1, 1.0.2, and 1.1.0, and the client/server suite
-  (matched server+client) against the floor and newest (1.0.1, 1.1.0).
+  1.0.1; 1.0.0 replaces instead. The supported matrix is single-sourced in
+  `deps.edn`'s `:ci` alias. CI runs the embedded suite against every listed version
+  (1.0.1, 1.0.2, 1.1.0) and the client/server suite (matched server+client) against
+  the floor and newest (1.0.1, 1.1.0).
 - `store`'s embedded KV handle is now obtained via Datalevin's supported
   `datalog-kv` rather than reaching into `datalevin.storage.Store` internals.
 
+### Added
+- **Automated `datalevin-watch` workflow.** A scheduled GitHub Actions job polls
+  Clojars for new Datalevin releases and keeps the `:ci` support matrix current. On
+  a new patch or minor it opens a pull request that expands the matrix (floor plus
+  the newest three). On a new major it opens an issue for a human to review. The
+  matrix lives only in `deps.edn`'s `:ci` alias, so CI and the workflow read one
+  source of truth.
+
+## [1.0.8] - 2026-07-27
 ### Added
 - **Client/server (`dtlv://`) support.** `store` now works over a networked
   Datalevin connection as well as an embedded one, keeping the core promise:
@@ -46,6 +78,7 @@ All notable changes to this project will be documented in this file. This change
   Client/server migrations use the two-transaction seam (the KV client can't join
   the remote datalog transaction); embedded keeps the single-transaction fold.
 
+## [1.0.7] - 2026-07-26
 ### Fixed
 - Applied-migration ordering (and therefore `rollback-last!`) now tracks true
   application order via a persisted monotonic `:seq`, instead of `:applied-at`

@@ -74,6 +74,43 @@ consequences for rollbacks:
    identical to what it was before. Plan reversals around setting values, not
    removing keys.
 
+## Disabling an index: `:db/noindex`
+
+`:db/noindex true` keeps an attribute out of the AVE index. Set it in a
+`:schema/create` step for a new attribute. The attribute still stores and reads
+back per entity, so pull and entity-bound queries work. A value-bound query on it
+throws, because there is no AVE index to search. Unique and reference attributes
+cannot opt out.
+
+```clojure
+{:schema/create {:document/body {:db/valueType :db.type/string :db/noindex true}}}
+```
+
+A `:schema/alter` step can toggle `:db/noindex`, but only before the attribute has
+data. Once data exist, Datalevin rejects the change. To index an attribute that
+already has data, use `index-attr` instead.
+
+### Re-enabling the index with `index-attr`
+
+Call Datalevin's `index-attr` from a function step. It backfills the existing
+values and clears `:db/noindex` from the schema. It runs inside the migration's
+transaction, so it folds atomically like any other step.
+
+```clojure
+;; resources/migrations/0007-index-body.edn
+{:up [my.app.migrations/index-document-body]   ; resolves to a (fn [conn] ...)
+ :irreversible? true}
+
+;; my/app/migrations.clj
+(defn index-document-body [conn]
+  (datalevin.core/index-attr conn :document/body))
+```
+
+Mark the migration `:irreversible? true`, or supply a real `:down`. A rollback
+cannot simply set `:db/noindex` back on, because Datalevin rejects a `:db/noindex`
+change once the attribute has data. Undoing an index means re-creating the
+attribute, which a `:down` must do explicitly.
+
 ## Upgrading from the old `:schema` step
 
 Earlier versions used a single `:schema` step for both adding and updating
