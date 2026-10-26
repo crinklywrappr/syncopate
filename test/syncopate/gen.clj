@@ -9,13 +9,14 @@
 
 (def value-type
   "Datalevin datalog value types usable with a bare `{:db/valueType _}` in the
-  stateful specs. Excludes `:db.type/tuple` (needs companion keys) and
-  `:db.type/vec`/`:db.type/idoc` (embedding/JSON-index machinery that degrades
-  under the specs' repeated add/remove churn)."
+  stateful specs. Excludes only `:db.type/tuple` (a bare tuple needs companion
+  keys these specs don't supply). `:db.type/vec` and `:db.type/idoc` are included:
+  the add/remove-churn hang they caused on older Datalevin is gone on the supported
+  floor (confirmed across many seeds, embedded and client/server)."
   (gen/elements [:db.type/string :db.type/long :db.type/boolean :db.type/keyword
                  :db.type/double :db.type/float :db.type/symbol :db.type/instant
                  :db.type/uuid :db.type/bigint :db.type/bigdec :db.type/ref
-                 :db.type/bytes]))
+                 :db.type/bytes :db.type/vec :db.type/idoc]))
 
 (def attr-def
   "An attribute definition: usually a `:db/valueType` (sometimes omitted → EDN
@@ -44,9 +45,9 @@
 ;; ---------------------------------------------------------------------------
 
 (def broad-value-type
-  "All 16 Datalevin datalog value types — for PURE specs only (no DB), so the
-  exotic types (`:db.type/tuple`/`vec`/`idoc`) get exercised in classification
-  without the schema-churn hang they cause against a real store."
+  "All 16 Datalevin datalog value types — for PURE specs only (no DB). `:db.type/tuple`
+  is here but not in `value-type`: a bare tuple needs companion keys the stateful
+  specs don't supply, so it is exercised only in classification."
   (gen/elements [:db.type/string :db.type/long :db.type/boolean :db.type/keyword
                  :db.type/double :db.type/float :db.type/symbol :db.type/instant
                  :db.type/uuid :db.type/bigint :db.type/bigdec :db.type/ref
