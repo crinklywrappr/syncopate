@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](http://keepachangelog.com/).
 
 ## [Unreleased]
+
+## [1.0.12] - 2026-10-26
+Documentation only. This release corrects the CHANGELOG and adds CONTRIBUTING
+with the release checklist. The code is unchanged from 1.0.11.
+
+## [1.0.11] - 2026-10-26
 ### Changed
 - **BREAKING: the Datalevin floor is raised to 1.2.2** (was 1.0.1). A plain
   `:mvn/version` is a soft or minimum constraint. Syncopate pins the floor, not the
