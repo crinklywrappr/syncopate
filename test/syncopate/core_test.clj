@@ -17,8 +17,8 @@
 
 (defn with-temp-db [f]
   ;; A fresh, isolated db per test — embedded temp dir or a fresh remote db,
-  ;; per syncopate.test.mode (see syncopate.test-db). close! releases the
-  ;; remote store's KV client (a no-op embedded).
+  ;; per syncopate.test.mode (see syncopate.test-db). close! is a no-op now (the KV
+  ;; handle shares the connection), so closing the connection frees everything.
   (let [conn  (test-db/fresh-conn)
         store (syncopate/store conn)]
     (binding [*conn*  conn
@@ -133,12 +133,11 @@
       (is (= ["0001-add-users" "0002-split-names"] (rp/applied-migration-ids *store*)))
       (is (not (contains? (app-schema-attrs) :dept/name))))))
 
-(deftest ^:embedded atomic-rollback-on-failure
-  ;; Embedded-only: this is the atomic-fold guarantee that client/server
-  ;; deliberately trades for the documented two-transaction seam (the schema
-  ;; step commits before the failing fn, so it can't roll back remotely).
-  ;; The key guarantee: a failing transactional :up leaves NEITHER the schema
-  ;; change NOR the applied-id behind — both roll back together.
+(deftest atomic-rollback-on-failure
+  ;; The atomic-fold guarantee, in BOTH modes: a failing transactional :up leaves
+  ;; NEITHER the schema change NOR the applied-id behind — both roll back together.
+  ;; Client/server folds atomically too: `datalog-kv` on a transaction-bound
+  ;; connection joins the `with-transaction`.
   (let [boom (syncopate/->migration
               {:id "boomer"
                :up [{:schema/create {:widget/name {:db/valueType :db.type/string}}}
@@ -334,7 +333,7 @@
       ":schema/alter is not auto-invertible — a missing :down must error at build"))
 
 (deftest alter-patches-existing-definition
-  ;; datalevin 1.1.0 patches (merges) an existing attr's definition rather than
+  ;; datalevin patches (merges) an existing attr's definition rather than
   ;; replacing it — the property that makes :schema/alter first-class (and made
   ;; the old ambiguous :schema step's auto-drop rollback a data-loss footgun).
   (let [run-step! #'syncopate/run-step!]

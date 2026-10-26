@@ -360,12 +360,13 @@
 ;;
 ;; ragtime.core/migrate applies the body and records the applied-id as two
 ;; separate protocol calls -> two transactions. Because Syncopate keeps the
-;; applied-id in a KV DBI on the *same* LMDB environment as the data, these
-;; helpers fold both writes into one `d/with-transaction`: the migration body
-;; and its bookkeeping commit or roll back together (verified: a throw inside
-;; undoes both the datalog and the KV write). For `:transaction? false`
-;; migrations there is no transaction to fold into, so they fall back to the
-;; two-step protocol path (the only case where the seam remains).
+;; applied-id in a KV DBI on the *same* environment as the data, these helpers
+;; fold both writes into one `d/with-transaction`: the migration body and its
+;; bookkeeping commit or roll back together (verified: a throw inside undoes both
+;; the datalog and the KV write). This holds in both embedded and client/server
+;; mode -- on client/server, `datalog-kv` yields a KV view that shares the
+;; connection's transaction. Only `:transaction? false` migrations fall back to
+;; the two-step protocol path (the only case where the seam remains).
 ;; ---------------------------------------------------------------------------
 
 (defn migrate!
@@ -380,15 +381,15 @@
     (trove/log! {:level :debug :id :syncopate/migrating
                  :msg  (str "Migrating up: " id)
                  :data {:migration/id id :transactional? txn? :steps (count steps)}})
-    (if (and txn? (not (:remote? store)))
-      ;; embedded: fold the applied-id write into the migration's own transaction
+    (if txn?
+      ;; fold the applied-id write into the migration's own transaction (embedded
+      ;; and client/server alike: `datalog-kv` on the txn-bound conn joins it)
       (let [seq (store/next-seq (:kv store) dbi)]  ; read on the store's KV, before the txn
         (d/with-transaction [c conn]
           (run-steps! c id :up steps)
           (store/record! (store/conn->lmdb c) dbi id seq)))  ; write via the txn conn → joins it
-      ;; client/server (or :transaction? false): body runs (in its own datalog
-      ;; transaction when txn?), then the applied-id is recorded separately — the
-      ;; two-transaction seam (the KV client can't join a remote datalog txn).
+      ;; :transaction? false: no transaction to fold into, so the body runs and the
+      ;; applied-id is recorded separately — the two-write seam.
       (do (rp/run-up! migration store)
           (rp/add-migration-id store id)))
     (trove/log! {:level :info :id :syncopate/migrated
@@ -411,7 +412,7 @@
     (trove/log! {:level :debug :id :syncopate/rolling-back
                  :msg  (str "Rolling back: " id)
                  :data {:migration/id id :transactional? txn? :steps (count steps)}})
-    (if (and txn? (not (:remote? store)))
+    (if txn?
       (d/with-transaction [c conn]
         (run-steps! c id :down steps)
         (store/unrecord! (store/conn->lmdb c) dbi id))

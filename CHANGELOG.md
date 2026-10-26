@@ -15,6 +15,12 @@ All notable changes to this project will be documented in this file. This change
   tested range. The embedded suite runs 1.2.2, 1.2.5, 1.2.6, and 1.2.7. The
   client/server suite runs the floor and the newest, 1.2.2 and 1.2.7, with a
   matched server and client.
+- **Client/server migrations now fold atomically.** On a `dtlv://` connection the
+  applied-id write joins the migration's `with-transaction` via `datalog-kv`. A
+  transactional migration's body and its applied-id now commit or roll back
+  together, the same as embedded. Only `:transaction? false` migrations still use
+  the two-write seam. The store no longer opens a separate KV client, and `close!`
+  is a no-op kept for API symmetry.
 
 ## [1.0.10] - 2026-09-29
 ### Fixed

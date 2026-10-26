@@ -24,13 +24,14 @@ in ragtime's issue tracker, and the ideas in
   holds — never as datoms. It's invisible to `d/schema` and Datalog queries, and
   works under `:closed-schema? true`. This holds for both **embedded** connections
   (reusing the connection's own LMDB env) and **client/server** (`dtlv://`)
-  connections (a KV client to the *same server database*, so the DBI sits beside
-  `datalevin/eav` etc. on the server).
-- **Migrations are atomic** — each direction runs inside `d/with-transaction` by
-  default, with a per-migration `:transaction? false` escape for operations that
-  can't (ragtime issues #107 / #119). (In client/server mode the applied-id write
-  can't join the remote datalog transaction, so it uses the two-transaction seam —
-  the same one `:transaction? false` uses; see "Notes & limitations".)
+  connections (a KV view on the *same server database*, so the DBI sits beside
+  `datalevin/eav` on the server).
+- **Migrations are atomic.** Each direction runs inside `d/with-transaction` by
+  default. A per-migration `:transaction? false` escape covers operations that
+  cannot run in one (ragtime issues #107 / #119). This holds in client/server mode
+  too. There, the applied-id write joins the remote datalog transaction via
+  `datalog-kv`. So only `:transaction? false` uses the two-write seam (see "Notes
+  & limitations").
 - **Errors are actionable.** Failures are re-thrown as `ex-info` carrying the
   migration id, direction, phase and offending step — never silently dropped
   (ragtime issues #130 / #146).
@@ -262,9 +263,9 @@ it's tagged `^:embedded` and skipped in the remote run.
   attributes, transacts data, or runs a function needs an explicit `:down` (the
   prior state can't be inferred).
 - The applied-migration state lives in a KV DBI on the connection's own
-  environment. Embedded stores reach that handle via Datalevin's supported
-  `datalog-kv`; client/server stores open a KV client to the same database
-  (the remote store's `:uri` + `open-kv`).
+  environment. Both embedded and client/server stores reach that handle via
+  Datalevin's `datalog-kv`. On client/server it is a KV view that shares the
+  connection's server clients and transaction, not a separate session.
 - **Supported Datalevin range: see `deps.edn`.** The `:ci` alias's
   `:datalevin/versions` vector is the source of truth for the tested range. The
   `:deps` dependency is pinned to the *floor* (the lowest supported version), not
@@ -272,12 +273,13 @@ it's tagged `^:embedded` and skipped in the remote run.
   vector to run the embedded suite across every supported version and the
   client/server suite at the floor and newest; `clojure -T:build test-all` runs the
   whole range locally.
-- **Client/server** (`dtlv://`) is supported: the store opens a KV client to the
-  same server database (sharing the datalog connection's env). Call
-  `(syncopate/close! store)` when done to release that client (no-op for embedded).
-  Client/server migrations use the two-transaction seam (body committed, applied-id
-  recorded after) since the KV client can't join the remote datalog transaction —
-  keep them idempotent-friendly, as with `:transaction? false`.
+- **Client/server** (`dtlv://`) is supported and folds atomically, the same as
+  embedded. `datalog-kv` returns a KV view that shares the connection's
+  transaction, so a transactional migration's body and its applied-id commit or
+  roll back together. Only `:transaction? false` migrations fall back to the
+  two-write seam (body committed, applied-id recorded after), so keep those
+  idempotent-friendly. `(syncopate/close! store)` stays for API symmetry and is a
+  no-op.
 - Datalevin needs some JVM flags (they suppress warnings / grant native access):
   `--add-opens=java.base/java.nio=ALL-UNNAMED`,
   `--add-opens=java.base/sun.nio.ch=ALL-UNNAMED`, and

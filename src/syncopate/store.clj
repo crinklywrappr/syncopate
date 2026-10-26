@@ -3,48 +3,30 @@
 
   Applied-migration state lives in a dedicated key-value DBI on the *same*
   environment the app's Datalog connection already holds — never as datoms. This
-  holds for both connection kinds:
+  holds for both connection kinds, via datalevin's `datalog-kv`:
 
-  - **embedded** (a local LMDB directory): reuse the connection's own environment
-    via the backing `datalevin.storage.Store`'s `lmdb` handle (Datalevin forbids a
-    second LMDB connection to the same directory in one process, so we can't just
-    `open-kv`).
-  - **client/server** (a `dtlv://` URI): the remote Datalog store does not expose
-    the KV surface, so open a KV *client* to the SAME server database via
-    `open-kv`. It shares the datalog connection's server environment (its DBIs sit
-    alongside `datalevin/eav` etc.), so the promise holds — a KV DBI on the same
-    env, never datoms. (Because that KV client is a separate session, it can't join
-    the datalog `with-transaction`, so client/server migrations record with the
-    two-transaction seam rather than the single-transaction fold.)"
+  - **embedded** (a local LMDB directory): `datalog-kv` returns the connection's
+    own LMDB handle.
+  - **client/server** (a `dtlv://` URI): `datalog-kv` returns a KV *view* that
+    shares the remote Datalog store's clients and transaction. The applied-id DBI
+    sits on the SAME server database (alongside `datalevin/eav` etc.), and a write
+    on a transaction-bound connection joins the migration's `with-transaction`. No
+    separate KV session is opened, so embedded and client/server fold identically."
   (:require [datalevin.core :as d]
             [ragtime.protocols :as rp]
             [taoensso.trove :as trove])
-  (:import [java.util Date]
-           [datalevin.remote DatalogStore]))
+  (:import [java.util Date]))
 
 (def default-dbi-name "__syncopate_migrations")
 
-(defn- remote-conn?
-  "True if `conn` is a client/server (`dtlv://`) connection rather than embedded."
-  [conn]
-  (instance? DatalogStore (:store @conn)))
-
 (defn conn->lmdb
-  "The KV/LMDB handle backing an *embedded* Datalog connection, via datalevin's
-  supported `datalog-kv` (rather than reaching into the storage internals). Works
-  for a transaction-bound connection too, so the atomic helpers in `syncopate.core`
-  can write the applied-id inside the migration's own `with-transaction`."
+  "The KV handle backing a Datalog connection, via datalevin's `datalog-kv`. Works
+  embedded and client/server, and on a transaction-bound connection, so the atomic
+  helpers in `syncopate.core` can write the applied-id inside the migration's own
+  `with-transaction`. On client/server it is a KV view sharing the connection's
+  clients and transaction, not a separate session."
   [conn]
   (d/datalog-kv conn))
-
-(defn- open-kv-handle
-  "The KV `ILMDB` handle for a connection's applied-migration DBI. Embedded → the
-  connection's own env (`conn->lmdb`). Client/server → a KV client opened to the
-  SAME server database via `open-kv`."
-  [conn]
-  (if (remote-conn? conn)
-    (d/open-kv (.-uri ^DatalogStore (:store @conn)))
-    (conn->lmdb conn)))
 
 (defn ensure-store!
   "Open (creating if absent) the migrations DBI on `lmdb`. Idempotent — our
@@ -81,7 +63,7 @@
                :msg  (str "Removed applied migration: " id)
                :data {:migration/id (str id) :dbi dbi-name}}))
 
-(defrecord SyncopateStore [conn dbi-name kv remote?]
+(defrecord SyncopateStore [conn dbi-name kv]
   rp/DataStore
   (add-migration-id [_ id]
     (record! kv dbi-name id (next-seq kv dbi-name)))
@@ -110,23 +92,23 @@
 
 (defn store
   "Construct a Syncopate DataStore over a live Datalevin connection — embedded or
-  client/server (`dtlv://`). For a client/server connection this opens a KV client
-  to the same server database; release it with `close!` when done.
+  client/server (`dtlv://`). The applied-migration DBI lives on the connection's
+  own environment (embedded) or the same server database (client/server), reached
+  via `datalog-kv`.
 
   Options:
     :dbi-name - name of the KV DBI holding applied-migration state
                 (default \"__syncopate_migrations\")."
   ([conn] (store conn {}))
   ([conn {:keys [dbi-name] :or {dbi-name default-dbi-name}}]
-   (let [remote? (remote-conn? conn)
-         kv      (open-kv-handle conn)]
+   (let [kv (conn->lmdb conn)]
      (warm! kv dbi-name)
-     (->SyncopateStore conn dbi-name kv remote?))))
+     (->SyncopateStore conn dbi-name kv))))
 
 (defn close!
-  "Release resources the store holds beyond its `conn`. For a client/server store
-  this closes the KV client opened to the server; embedded stores hold the
-  connection's own env, so it's a no-op (the caller closes the connection)."
-  [store]
-  (when (:remote? store) (d/close-kv (:kv store)))
+  "Release resources the store holds beyond its `conn`. The applied-migration KV
+  handle shares the connection's own environment (embedded) or its server clients
+  (client/server), so there is nothing extra to release. This is a no-op kept for
+  API symmetry; the caller closes the connection."
+  [_store]
   nil)
