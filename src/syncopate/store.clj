@@ -19,7 +19,7 @@
 
 (def default-dbi-name "__syncopate_migrations")
 
-(defn conn->lmdb
+(defn conn->kv
   "The KV handle backing a Datalog connection, via datalevin's `datalog-kv`. Works
   embedded and client/server, and on a transaction-bound connection, so the atomic
   helpers in `syncopate.core` can write the applied-id inside the migration's own
@@ -29,36 +29,36 @@
   (d/datalog-kv conn))
 
 (defn ensure-store!
-  "Open (creating if absent) the migrations DBI on `lmdb`. Idempotent — our
+  "Open (creating if absent) the migrations DBI on `kv`. Idempotent — our
   equivalent of the SQL adaptors' `ensure-migrations-table-exists`."
-  [lmdb dbi-name]
-  (d/open-dbi lmdb dbi-name))
+  [kv dbi-name]
+  (d/open-dbi kv dbi-name))
 
 (defn next-seq
-  "The next monotonic application sequence number for the migrations DBI on `lmdb`:
+  "The next monotonic application sequence number for the migrations DBI on `kv`:
   one past the largest `:seq` on record (never reused, so it's robust to the gaps
   `unrecord!` leaves). Ordering by `:seq` reflects true application order, immune to
   wall-clock millisecond ties."
-  [lmdb dbi-name]
-  (ensure-store! lmdb dbi-name)
+  [kv dbi-name]
+  (ensure-store! kv dbi-name)
   (transduce
    (map (fn [[_ v]] (:seq v -1)))
    (completing max inc)
-   -1 (d/get-range lmdb dbi-name [:all])))
+   -1 (d/get-range kv dbi-name [:all])))
 
 (defn record!
-  "Record `id` as applied with application sequence `seq` on `lmdb` (which may be a
+  "Record `id` as applied with application sequence `seq` on `kv` (which may be a
   transaction-bound handle). Assumes the DBI already exists (see `ensure-store!`)."
-  [lmdb dbi-name id seq]
-  (d/transact-kv lmdb [[:put dbi-name (str id) {:applied-at (Date.) :seq seq}]])
+  [kv dbi-name id seq]
+  (d/transact-kv kv [[:put dbi-name (str id) {:applied-at (Date.) :seq seq}]])
   (trove/log! {:level :debug :id :syncopate/recorded
                :msg  (str "Recorded applied migration: " id)
                :data {:migration/id (str id) :dbi dbi-name :seq seq}}))
 
 (defn unrecord!
-  "Remove `id` from the applied set on `lmdb` (which may be transaction-bound)."
-  [lmdb dbi-name id]
-  (d/transact-kv lmdb [[:del dbi-name (str id)]])
+  "Remove `id` from the applied set on `kv` (which may be transaction-bound)."
+  [kv dbi-name id]
+  (d/transact-kv kv [[:del dbi-name (str id)]])
   (trove/log! {:level :debug :id :syncopate/unrecorded
                :msg  (str "Removed applied migration: " id)
                :data {:migration/id (str id) :dbi dbi-name}}))
@@ -85,9 +85,9 @@
   `with-transaction`-bound connection until a *realized* read has happened first.
   Warm the DBI once at store construction so the first `migrate!`/`rollback!` on a
   cold store is safe."
-  [lmdb dbi-name]
-  (ensure-store! lmdb dbi-name)
-  (into [] (d/get-range lmdb dbi-name [:all]))
+  [kv dbi-name]
+  (ensure-store! kv dbi-name)
+  (into [] (d/get-range kv dbi-name [:all]))
   nil)
 
 (defn store
@@ -101,7 +101,7 @@
                 (default \"__syncopate_migrations\")."
   ([conn] (store conn {}))
   ([conn {:keys [dbi-name] :or {dbi-name default-dbi-name}}]
-   (let [kv (conn->lmdb conn)]
+   (let [kv (conn->kv conn)]
      (warm! kv dbi-name)
      (->SyncopateStore conn dbi-name kv))))
 

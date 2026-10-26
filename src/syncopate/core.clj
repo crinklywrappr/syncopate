@@ -387,7 +387,7 @@
       (let [seq (store/next-seq (:kv store) dbi)]  ; read on the store's KV, before the txn
         (d/with-transaction [c conn]
           (run-steps! c id :up steps)
-          (store/record! (store/conn->lmdb c) dbi id seq)))  ; write via the txn conn → joins it
+          (store/record! (store/conn->kv c) dbi id seq)))  ; write via the txn conn → joins it
       ;; :transaction? false: no transaction to fold into, so the body runs and the
       ;; applied-id is recorded separately — the two-write seam.
       (do (rp/run-up! migration store)
@@ -415,7 +415,7 @@
     (if txn?
       (d/with-transaction [c conn]
         (run-steps! c id :down steps)
-        (store/unrecord! (store/conn->lmdb c) dbi id))
+        (store/unrecord! (store/conn->kv c) dbi id))
       (do (rp/run-down! migration store)
           (rp/remove-migration-id store id)))
     (trove/log! {:level :info :id :syncopate/rolled-back
