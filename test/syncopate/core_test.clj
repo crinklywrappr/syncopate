@@ -418,3 +418,28 @@
     (syncopate/rollback! *store* toggle)
     (is (not (:db/noindex (get (d/schema *conn*) :doc/note)))
         ":down turned :db/noindex back off")))
+
+(deftest remove-noindex-attr-with-data
+  ;; A :db/noindex attr has no attribute-seekable index, so a value-bound query on it
+  ;; throws (datalevin 1.2.8+ makes :db.type/idoc and :db.type/vec noindex by default).
+  ;; apply-remove!'s old value-query retract-scan therefore failed to drop such an
+  ;; attr. :schema/remove must now retract its data (read from the :eav index) and drop
+  ;; it. Uses an explicitly-flagged noindex string attr: noindex on every supported
+  ;; version, so the regression is deterministic across the matrix and both modes.
+  (let [a           :ni/blob
+        def*        {:db/valueType :db.type/string :db/noindex true}
+        datom-count (fn [] (count (filter #(= a (:a %)) (d/datoms (d/db *conn*) :eav))))
+        create (syncopate/->migration
+                {:id   "rm-blob-create"
+                 :up   [{:schema/create {a def*}} {:tx [{a "payload"} {a "payload"}]}]
+                 :down [{:schema/remove [a]}]})
+        drop   (syncopate/->migration
+                {:id   "rm-blob-drop"
+                 :up   [{:schema/remove [a]}]
+                 :down [{:schema/create {a def*}}]})]
+    (syncopate/migrate! *store* create)
+    (is (true? (:db/noindex (get (d/schema *conn*) a))) "attr is noindex")
+    (is (= 2 (datom-count)) "two datoms present before remove")
+    (syncopate/migrate! *store* drop)
+    (is (not (contains? (app-schema-attrs) a)) "noindex attr dropped")
+    (is (zero? (datom-count)) "its datoms were retracted first")))

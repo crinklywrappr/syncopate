@@ -1,7 +1,13 @@
 # Change Log
 All notable changes to this project will be documented in this file. This change log follows the conventions of [keepachangelog.com](http://keepachangelog.com/).
 
-## [Unreleased]
+## [1.0.13] - 2026-11-02
+### Fixed
+- **Removing a `:db/noindex` attribute no longer fails.** A noindex attribute has
+  no attribute-seekable index, so the value-bound query that `:schema/remove` used
+  to find datoms to retract threw on it. `:schema/remove` now reads those datoms
+  from the `:eav` index. This matters on datalevin 1.2.8 and later, which make
+  `:db.type/idoc` and `:db.type/vec` attributes noindex by default.
 
 ## [1.0.12] - 2026-10-26
 Documentation only. This release corrects the CHANGELOG and adds CONTRIBUTING
