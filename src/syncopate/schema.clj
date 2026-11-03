@@ -89,25 +89,50 @@
   [{create :schema/create}]
   {:schema/remove (vec (keys create))})
 
+(defn- indexed-retractions [db attrs]
+  (for [[e a v] (d/q '[:find ?e ?a ?v
+                       :in $ [?a ...]
+                       :where [?e ?a ?v]]
+                     db attrs)]
+    [:db/retract e a v]))
+
+;; attrs must be a set
+(defn- noindex-retractions [db attrs]
+  (when (seq attrs)
+    (for [d (d/datoms db :eav)
+          :when (contains? attrs (:a d))]
+      [:db/retract (:e d) (:a d) (:v d)])))
+
+(defn- retraction-rf [db]
+  (fn
+    ([acc [attr k]] (update acc k conj attr))
+    ([{:keys [indexed noindex]}]
+     (into [] cat [(indexed-retractions db indexed)
+                   (noindex-retractions db noindex)]))))
+
+(defn- index-classifier [schema]
+  (fn [attr]
+    (if (:db/noindex (get schema attr))
+      :noindex
+      :indexed)))
+
 (defn- apply-remove!
-  "Retract every datom of each attr in `remove`, then drop the attrs from the
+  "Retract every datom of each attr in `attrs`, then drop the attrs from the
   schema — so no data is silently orphaned and `update-schema` won't reject the
   drop."
-  [conn remove]
+  [conn attrs]
   (let [db          (d/db conn)
-        retractions (vec (for [a     remove
-                               [e v] (d/q '[:find ?e ?v
-                                            :in $ ?a
-                                            :where [?e ?a ?v]]
-                                          db a)]
-                           [:db/retract e a v]))]
+        schema      (d/schema conn)
+        retractions (transduce (map (juxt identity (index-classifier schema)))
+                               (retraction-rf db)
+                               {:indexed (list) :noindex #{}} attrs)]
     (when (seq retractions)
       (trove/log! {:level :debug :id :syncopate/schema-retract
                    :msg  (format "Retracting %d datom(s) before dropping attr(s)"
                                  (count retractions))
-                   :data {:attrs (vec remove) :count (count retractions)}})
+                   :data {:attrs (vec attrs) :count (count retractions)}})
       (d/transact! conn retractions)))
-  (d/update-schema conn nil (set remove)))
+  (d/update-schema conn nil (set attrs)))
 
 (defn apply-delta!
   "Apply a single schema operation to Datalog connection `conn`.

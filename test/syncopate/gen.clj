@@ -10,9 +10,10 @@
 (def value-type
   "Datalevin datalog value types usable with a bare `{:db/valueType _}` in the
   stateful specs. Excludes only `:db.type/tuple` (a bare tuple needs companion
-  keys these specs don't supply). `:db.type/vec` and `:db.type/idoc` are included:
-  the add/remove-churn hang they caused on older Datalevin is gone on the supported
-  floor (confirmed across many seeds, embedded and client/server)."
+  keys these specs don't supply). `:db.type/vec` and `:db.type/idoc` are included.
+  Some Datalevin versions make them `:db/noindex` by default, so removing such an
+  attr cannot use a value-bound retract scan — `syncopate.schema/apply-remove!`
+  reads those datoms from the `:eav` index instead."
   (gen/elements [:db.type/string :db.type/long :db.type/boolean :db.type/keyword
                  :db.type/double :db.type/float :db.type/symbol :db.type/instant
                  :db.type/uuid :db.type/bigint :db.type/bigdec :db.type/ref
