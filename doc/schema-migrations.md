@@ -111,6 +111,45 @@ cannot simply set `:db/noindex` back on, because Datalevin rejects a `:db/noinde
 change once the attribute has data. Undoing an index means re-creating the
 attribute, which a `:down` must do explicitly.
 
+## Value types that need special handling
+
+Three value types or options cannot be created and populated by an ordinary
+transactional migration. This is a Datalevin constraint across the supported
+range, not something Syncopate can work around at the migration layer. Scalars,
+references, and tuples are unaffected.
+
+### `:db.type/idoc`: populate in a non-transactional migration
+
+An idoc attribute builds its document index on the first write to it, and that
+build fails inside a Datalevin transaction. The error reads `Cannot read field
+"max_doc" because "index" is null`. Creating an empty idoc attribute in a
+transactional migration works. Inserting idoc data in one does not.
+
+Set `:transaction? false` on the migration that inserts idoc data. The body then
+runs without `with-transaction`, so the index builds normally. Syncopate records
+the applied id as a separate write for such a migration. That is the one case
+where it cannot fold the body and its bookkeeping into one transaction.
+
+```clojure
+{:id "0010-add-documents"
+ :transaction? false
+ :up [{:schema/create {:document/body {:db/valueType :db.type/idoc}}}
+      {:tx [{:document/body {:title "t" :text "..."}}]}]
+ :down [{:schema/remove [:document/body]}]}
+```
+
+### `:db.type/vec` and `:db/fulltext`: enable them at connection open
+
+A vector attribute needs a vector index, and a fulltext attribute needs a search
+engine. Datalevin builds these only on a connection that opened with the feature.
+A migration that adds such an attribute and then writes to it fails with a
+missing-implementation error, in a transaction or not. `:db.type/vec` also needs
+a `:dimensions` value, which a plain `:schema/create` does not supply.
+
+Declare these attributes in the schema you pass to `get-conn`, or open the
+connection with the matching option. Do not rely on a migration to make such an
+attribute usable.
+
 ## Upgrading from the old `:schema` step
 
 Earlier versions used a single `:schema` step for both adding and updating
